@@ -50,8 +50,32 @@ bool InitializeEA()
         
         // Step 2: Determine symbols to trade (LIVE trading only)
         string selectedSymbols[];
-        double minScore = 60.0; // Or get from inputs
+        double minScore = 60.0;
         int symbolCount = DetermineActiveSymbols(selectedSymbols, minScore);
+
+        // ========== CRITICAL FIX ==========
+        // Copy selected symbols to global arrays
+        if(symbolCount > 0)
+        {
+            totalSymbols = symbolCount;
+            ArrayResize(activeSymbols, totalSymbols);
+            
+            for(int i = 0; i < totalSymbols; i++)
+            {
+                activeSymbols[i] = selectedSymbols[i];
+            }
+            
+            Print("Step 2: Selected ", totalSymbols, " symbols");
+            
+            // Log what we selected
+            for(int i = 0; i < totalSymbols; i++)
+            {
+                Print("  ", i+1, ". ", activeSymbols[i]);
+            }
+        }
+        else
+        // ========== END FIX ==========
+
         if(totalSymbols == 0)
         {
             Print("✗ ERROR: No symbols available for trading");

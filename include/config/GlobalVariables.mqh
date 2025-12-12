@@ -72,3 +72,12 @@ datetime g_LastTradedBarTime = 0;
 int g_TradesCountThisBar = 0;
 bool g_BuyTradedThisBar = false;
 bool g_SellTradedThisBar = false;
+
+// ============ TIER CONSTANTS ============
+#define TIER_1 1
+#define TIER_2 2  
+#define TIER_3 3
+#define TIER_4 4
+
+// Global tier variable
+int AccountTier = TIER_1; // Default to Tier 1

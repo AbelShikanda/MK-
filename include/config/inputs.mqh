@@ -17,7 +17,7 @@ input double BalanceForFourthSymbol  = 2000.0;
 
 //------------------ SYMBOL CONFIGURATION ---------------------------
 input group "=== SYMBOL CONFIGURATION ==="
-input string AvailableSymbols = "XAUUSD,XAGUSD,XPTUSD,COPPER";
+input string AvailableSymbols = "XAUUSD,XAGUSD,XPTUSD,COPPER,GBPUSD,USDJPY,USDCHF";
 input ENUM_TIMEFRAMES TradeTF       = PERIOD_M5;
 input ENUM_TIMEFRAMES MediumTF      = PERIOD_M15;
 input ENUM_TIMEFRAMES TrendTF       = PERIOD_H1;
