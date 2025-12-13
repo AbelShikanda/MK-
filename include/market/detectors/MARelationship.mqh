@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
-//| Enhanced MA Relationship Analyzer                               |
-//| Comprehensive multi-MA analysis on single timeframe             |
+//| Enhanced MA Relationship Analyzer (HIDDEN RANGE INDICATORS)     |
+//| Range detection MAs are hidden from chart                       |
 //+------------------------------------------------------------------+
 
 #include "../../config/structures.mqh"
@@ -46,6 +46,12 @@ struct MARelationshipScore
     string tradeAdvice;       // Trade advice based on analysis
     bool isCritical;          // True if critical condition detected
 };
+
+// ============ GLOBAL CACHE FOR HANDLES ============
+// Cache for MA handles to avoid creating duplicates
+int rangeMA21Handle = INVALID_HANDLE;
+int rangeMA89Handle = INVALID_HANDLE;
+string cachedRangeSymbol = "";
 
 //+------------------------------------------------------------------+
 //| NEW: Calculate MA Alignment (Direction-Neutral)                 |
@@ -261,10 +267,6 @@ bool CheckSmartMACrossover(const string symbol, const ENUM_TIMEFRAMES timeframe,
     return alignment.isCritical;
 }
 
-// [KEEP ALL OTHER FUNCTIONS AS-IS FOR BACKWARD COMPATIBILITY]
-// The AnalyzeMA5_9Relationship, AnalyzeMA9_21Relationship, etc. can stay
-// but they won't be used by the new system
-
 //+------------------------------------------------------------------+
 //| Get Detailed MA Analysis Report (Updated)                       |
 //+------------------------------------------------------------------+
@@ -278,11 +280,6 @@ string GetMAAnalysisReport(const string symbol, const bool isBuyTrade)
                           VeryFastMA_Period_Enhanced, FastMA_Period_Enhanced,
                           MediumMA_Period_Enhanced, SlowMA_Period_Enhanced);
     
-    // report += "CONFIDENCE SCORES:\n";
-    // report += StringFormat("  BUY Confidence:  %.1f/100 (Bullish alignment)\n", alignment.buyConfidence);
-    // report += StringFormat("  SELL Confidence: %.1f/100 (Bearish alignment)\n", alignment.sellConfidence);
-    // report += StringFormat("  Net Bias: %.1f (%s)\n\n", alignment.netBias, alignment.alignment);
-    
     if(alignment.warning != "") {
         report += StringFormat("⚠️ WARNINGS: %s\n\n", alignment.warning);
     }
@@ -293,4 +290,134 @@ string GetMAAnalysisReport(const string symbol, const bool isBuyTrade)
     return report;
 }
 
-// [KEEP ALL OTHER ORIGINAL FUNCTIONS - They can stay for backward compatibility]
+//+------------------------------------------------------------------+
+//| Simple MA Distance Range Check (FULL SIMPLE VERSION)            |
+//+------------------------------------------------------------------+
+bool IsMarketRangingByMADistance(const string symbol, const bool isBuy)
+{
+    // ============ 1. CREATE MA HANDLES ============
+    int hMA21 = iMA(symbol, PERIOD_M15, 21, 0, MODE_SMA, PRICE_CLOSE);
+    int hMA89 = iMA(symbol, PERIOD_M15, 89, 0, MODE_SMA, PRICE_CLOSE);
+    
+    if(hMA21 == INVALID_HANDLE || hMA89 == INVALID_HANDLE)
+    {
+        Print(symbol, " - Failed to create MA handles");
+        return false;
+    }
+    
+    // ============ 2. GET MA VALUES ============
+    double ma21[1], ma89[1];
+    if(CopyBuffer(hMA21, 0, 0, 1, ma21) < 1 || CopyBuffer(hMA89, 0, 0, 1, ma89) < 1)
+    {
+        IndicatorRelease(hMA21);
+        IndicatorRelease(hMA89);
+        Print(symbol, " - Failed to get MA values");
+        return false;
+    }
+    
+    // ============ 3. RELEASE HANDLES ============
+    IndicatorRelease(hMA21);
+    IndicatorRelease(hMA89);
+    
+    // ============ 4. CALCULATE DISTANCE ============
+    double currentPrice = SymbolInfoDouble(symbol, SYMBOL_BID);
+    if(currentPrice <= 0)
+    {
+        Print(symbol, " - Invalid current price");
+        return false;
+    }
+    
+    double distancePercent = (MathAbs(ma21[0] - ma89[0]) / currentPrice) * 100;
+    
+    // ============ 5. GET PREVIOUS VALUES FOR BUFFER ============
+    // Create handles again for previous values
+    int hMA21_prev = iMA(symbol, PERIOD_M15, 21, 0, MODE_SMA, PRICE_CLOSE);
+    int hMA89_prev = iMA(symbol, PERIOD_M15, 89, 0, MODE_SMA, PRICE_CLOSE);
+    
+    double ma21_prev[2], ma89_prev[2];
+    double prevDistancePercent = distancePercent; // Default to current
+    
+    if(CopyBuffer(hMA21_prev, 0, 0, 2, ma21_prev) >= 2 && 
+       CopyBuffer(hMA89_prev, 0, 0, 2, ma89_prev) >= 2)
+    {
+        prevDistancePercent = (MathAbs(ma21_prev[1] - ma89_prev[1]) / currentPrice) * 100;
+    }
+    
+    IndicatorRelease(hMA21_prev);
+    IndicatorRelease(hMA89_prev);
+    
+    // ============ 6. THRESHOLDS ============
+    double RANGING_THRESHOLD = 0.11;    // Below 0.11% = RANGING
+    double BUFFER_ZONE = 0.02;          // 0.02% buffer
+    
+    // ============ 7. BUFFER ZONE LOGIC ============
+    bool wasRanging = (prevDistancePercent < RANGING_THRESHOLD);
+    bool isRangingNow = (distancePercent < RANGING_THRESHOLD);
+    
+    bool isRanging;
+    
+    if(wasRanging && !isRangingNow)
+    {
+        // Was ranging, now above threshold - check buffer
+        isRanging = (distancePercent < (RANGING_THRESHOLD + BUFFER_ZONE));
+    }
+    else if(!wasRanging && isRangingNow)
+    {
+        // Was trending, now below threshold - check buffer
+        isRanging = (distancePercent < (RANGING_THRESHOLD - BUFFER_ZONE));
+    }
+    else
+    {
+        // No change in state
+        isRanging = isRangingNow;
+    }
+    
+    // ============ 8. LOGGING ============
+    static datetime lastPrintTime = 0;
+    datetime currentTime = iTime(symbol, PERIOD_M15, 0);
+    
+    if(currentTime != lastPrintTime || isRanging)
+    {
+        Print(symbol, " - MA Range Check:");
+        Print("  MA21: ", DoubleToString(ma21[0], 5));
+        Print("  MA89: ", DoubleToString(ma89[0], 5));
+        Print("  Distance: ", DoubleToString(distancePercent, 3), "%");
+        Print("  Previous: ", DoubleToString(prevDistancePercent, 3), "%");
+        Print("  Threshold: ", DoubleToString(RANGING_THRESHOLD, 3), "%");
+        Print("  Buffer: ±", DoubleToString(BUFFER_ZONE, 3), "%");
+        Print("  Result: ", isRanging ? "RANGING" : "TRENDING");
+        lastPrintTime = currentTime;
+    }
+    
+    return isRanging;
+}
+
+//+------------------------------------------------------------------+
+//| Cleanup Range MA Handles (Call from OnDeinit)                   |
+//+------------------------------------------------------------------+
+void CleanupRangeMAHandles()
+{
+    if(rangeMA21Handle != INVALID_HANDLE)
+    {
+        IndicatorRelease(rangeMA21Handle);
+        rangeMA21Handle = INVALID_HANDLE;
+    }
+    
+    if(rangeMA89Handle != INVALID_HANDLE)
+    {
+        IndicatorRelease(rangeMA89Handle);
+        rangeMA89Handle = INVALID_HANDLE;
+    }
+    
+    cachedRangeSymbol = "";
+    Print("Cleaned up range MA handles");
+}
+
+// i want to release indicators once only
+// Add CanOpenTrade(...) and call it before any open/add.
+// Restore CheckAdjustedConfirmation to real scoring and include CanOpenTrade.
+// After any order action, RefreshPositionState (re-query open trades).
+// On any failed order, stop further attempts in the same decision (return "WAIT").
+// Add per-symbol cooldown for new opens after a close or after CLOSE_ALL fold.
+// Require at least 2-of-3 MA layers agreeing to open (reduce 5–9-only opens).
+// Fix TestTradeExecution to pass a numeric lot size.

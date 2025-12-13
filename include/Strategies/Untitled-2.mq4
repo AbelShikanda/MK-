@@ -23,7 +23,7 @@
 // Adjusted results confirmation threshold (1-3 scale, where >1.5 is confirmed)
 input double Adjusted_Confirmation_Threshold = 1.5;
 datetime lastCloseTime = 0;
-input int Close_Position_Min_Interval = 900; // Minimum seconds between position closures
+input int Close_Position_Min_Interval = 900; // Minimum seconds between position closures (default: 1 minute)
 
 //+------------------------------------------------------------------+
 //| Get MATrends Action Based on Hierarchical MA Gaps               |
@@ -262,7 +262,7 @@ string ExecuteTradeBasedOnDecision(string symbol)
                 botThoughts = "MA_HIERARCHY_CLOSE_SELL_FOR_BUY";
                 decision = "LONG";
                 Print("ACTION: Closing SELL for BUY (Hierarchical MA BUY signal)");
-                ClosePositionType(symbol, POSITION_TYPE_SELL);
+                CloseBiggestLosingPosition(symbol, POSITION_TYPE_SELL);
                 if(adjustedConfirm) OpenNewPosition(symbol, true);
             }
             else if(currentDirection != POSITION_TYPE_BUY && openTrades == 0) {
@@ -290,7 +290,7 @@ string ExecuteTradeBasedOnDecision(string symbol)
                 botThoughts = "MA_HIERARCHY_CLOSE_BUY_FOR_SELL";
                 decision = "SHORT";
                 Print("ACTION: Closing BUY for SELL (Hierarchical MA SELL signal)");
-                ClosePositionType(symbol, POSITION_TYPE_BUY);
+                CloseBiggestLosingPosition(symbol, POSITION_TYPE_BUY);
                 if(adjustedConfirm) OpenNewPosition(symbol, false);
             }
             else if(currentDirection != POSITION_TYPE_SELL && openTrades == 0) {
@@ -384,15 +384,14 @@ string ExecuteTradeBasedOnDecision(string symbol)
                 botThoughts = "MA_HIERARCHY_CLOSE_SELL_FOR_BUY_BLOCKED";
                 decision = "LONG_BLOCKED_CAN_REVERSE";
                 Print("ACTION: Closing SELL position to make room for BUY");
-                ClosePositionType(symbol, POSITION_TYPE_SELL);
+                CloseBiggestLosingPosition(symbol, POSITION_TYPE_SELL);
             }
             else if(openTrades > 0 && currentDirection == POSITION_TYPE_BUY) {
-                // CRITICAL FIX: When blocked from adding to BUY, only fold if we're NOT adding new positions
-                // Don't fold just because we're blocked - that creates the loop!
-                botThoughts = "MA_HIERARCHY_HOLD_BUY_BLOCKED";
-                decision = "HOLDING_BLOCKED";
-                Print("ACTION: Blocked from adding to BUY - HOLDING existing positions");
-                // NO CloseBiggestLosingPosition() call here - that's what caused the loop!
+                // When blocked from adding to BUY, consider folding losing positions
+                botThoughts = "MA_HIERARCHY_FOLD_LOSING_BUY_BLOCKED";
+                decision = "FOLDING_BLOCKED";
+                Print("ACTION: Blocked from adding to BUY - Checking if we should fold losing positions");
+                CloseBiggestLosingPosition(symbol);
             }
             else {
                 botThoughts = "MA_HIERARCHY_BUY_BLOCKED";
@@ -426,15 +425,14 @@ string ExecuteTradeBasedOnDecision(string symbol)
                 botThoughts = "MA_HIERARCHY_CLOSE_BUY_FOR_SELL_BLOCKED";
                 decision = "SHORT_BLOCKED_CAN_REVERSE";
                 Print("ACTION: Closing BUY position to make room for SELL");
-                ClosePositionType(symbol, POSITION_TYPE_BUY);
+                CloseBiggestLosingPosition(symbol, POSITION_TYPE_BUY);
             }
             else if(openTrades > 0 && currentDirection == POSITION_TYPE_SELL) {
-                // CRITICAL FIX: When blocked from adding to SELL, only fold if we're NOT adding new positions
-                // Don't fold just because we're blocked - that creates the loop!
-                botThoughts = "MA_HIERARCHY_HOLD_SELL_BLOCKED";
-                decision = "HOLDING_BLOCKED";
-                Print("ACTION: Blocked from adding to SELL - HOLDING existing positions");
-                // NO CloseBiggestLosingPosition() call here - that's what caused the loop!
+                // When blocked from adding to SELL, consider folding losing positions
+                botThoughts = "MA_HIERARCHY_FOLD_LOSING_SELL_BLOCKED";
+                decision = "FOLDING_BLOCKED";
+                Print("ACTION: Blocked from adding to SELL - Checking if we should fold losing positions");
+                CloseBiggestLosingPosition(symbol);
             }
             else {
                 botThoughts = "MA_HIERARCHY_SELL_BLOCKED";

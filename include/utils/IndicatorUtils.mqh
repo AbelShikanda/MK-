@@ -244,14 +244,69 @@ double GetATRAverage(int atr_handle, int period = 14)
 }
 
 //+------------------------------------------------------------------+
-//| Get current MA value                                            |
+//| Get current MA value with proper error handling                 |
 //+------------------------------------------------------------------+
 double GetCurrentMAValue(int ma_handle)
 {
+    // 1. Check if handle is valid
+    if(ma_handle == INVALID_HANDLE || ma_handle <= 0)
+    {
+        Print("ERROR GetCurrentMAValue: Invalid handle (", ma_handle, ")");
+        return 0.0;
+    }
+    
+    // 2. Check if indicator has calculated data
+    int calculated = BarsCalculated(ma_handle);
+    if(calculated <= 0)
+    {
+        Print("WARNING GetCurrentMAValue: No bars calculated for handle ", ma_handle);
+        // Try waiting a bit
+        Sleep(50);
+        calculated = BarsCalculated(ma_handle);
+        if(calculated <= 0)
+        {
+            Print("ERROR GetCurrentMAValue: Still no data after wait");
+            return 0.0;
+        }
+    }
+    
+    // 3. Try to get current value
     double ma_value[1];
-    if(CopyBuffer(ma_handle, 0, 0, 1, ma_value) > 0)
-        return ma_value[0];
-    return 0;
+    int copied = CopyBuffer(ma_handle, 0, 0, 1, ma_value);
+    
+    if(copied <= 0)
+    {
+        int error = GetLastError();
+        // PrintFormat("ERROR GetCurrentMAValue: CopyBuffer failed. Handle: %d, Error: %d", ma_handle, error);
+        
+        // Try getting previous bar
+        copied = CopyBuffer(ma_handle, 0, 1, 1, ma_value);
+        if(copied > 0)
+        {
+            // PrintFormat("SUCCESS GetCurrentMAValue: Got value from previous bar: %.5f", ma_value[0]);
+            return ma_value[0];
+        }
+        else
+        {
+            // Print("ERROR GetCurrentMAValue: Failed to get ANY value");
+            return 0.0;
+        }
+    }
+    
+    // 4. Check if value is valid (not 0 or extreme)
+    if(ma_value[0] == 0.0)
+    {
+        Print("WARNING GetCurrentMAValue: Value is 0.0, trying previous bar");
+        copied = CopyBuffer(ma_handle, 0, 1, 1, ma_value);
+        if(copied > 0 && ma_value[0] != 0.0)
+        {
+            return ma_value[0];
+        }
+    }
+    
+    // 5. Success
+    // PrintFormat("SUCCESS GetCurrentMAValue: Handle %d = %.5f", ma_handle, ma_value[0]);
+    return ma_value[0];
 }
 
 

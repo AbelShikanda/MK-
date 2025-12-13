@@ -20,6 +20,18 @@
 #include "../market/trend/MultiTimeframe.mqh"
 #include "../signals/SignalScorer.mqh"
 
+// For EURUSD, GBPUSD:
+// double RANGING_THRESHOLD_PERCENT = 0.15;    // Below 0.15% = RANGING
+// double TRENDING_THRESHOLD_PERCENT = 0.25;   // Above 0.25% = CLEAR TREND
+
+// For XAUUSD (Gold):
+// double RANGING_THRESHOLD_PERCENT = 0.25;    // Below 0.25% = RANGING  
+// double TRENDING_THRESHOLD_PERCENT = 0.40;   // Above 0.40% = CLEAR TREND
+
+// For JPY pairs:
+// double RANGING_THRESHOLD_PERCENT = 0.12;    // Below 0.12% = RANGING
+// double TRENDING_THRESHOLD_PERCENT = 0.20;   // Above 0.20% = CLEAR TREND
+
 // //+------------------------------------------------------------------+
 // //| Check Ultra-Sensitive Entry                                     |
 // //| Entry validation for sensitive trading conditions              |
@@ -60,7 +72,7 @@ bool CheckUltraSensitiveEntry(const string symbol, const bool isBuy)
     {
         // For pullbacks, accept slightly lower scores
         // 30 for BUY, 50 for SELL (SELL needs stronger signal)
-        int pullbackThreshold = isBuy ? 50 : 60;
+        int pullbackThreshold = isBuy ? 37 : 45;
         
         bool passed = (signalScore >= pullbackThreshold);
         
@@ -76,7 +88,7 @@ bool CheckUltraSensitiveEntry(const string symbol, const bool isBuy)
     {
         // For regular entries, need stronger signals
         // 60 for BUY, 80 for SELL (SELL needs much stronger signal)
-        int regularThreshold = isBuy ? 57 : 73;
+        int regularThreshold = isBuy ? 45 : 56;
         
         bool passed = (signalScore >= regularThreshold);
         
@@ -323,7 +335,7 @@ bool AddPositionValidated(const string symbol, const bool isBuy, const string re
     }
     
     // Minimum profit requirement
-    const double minProfitDollars = 3.0;
+    const double minProfitDollars = 7.0;
     const double profitMultiplier = 1.5;
     const double requiredProfit = minProfitDollars * MathPow(profitMultiplier, positions - 1);
     
@@ -668,109 +680,7 @@ double GetMAAlignmentScore(const string symbol, const bool isBuy)
 //+------------------------------------------------------------------+
 bool IsMarketRanging(const string symbol, const bool isBuy)
 {
-    // Get current market status
-    PrintM15MarketStatus(symbol);
-    
-    // Check trend strength
-    const ENUM_TREND_STRENGTH trend = GetM15TrendStrength(symbol);
-    
-    if(trend == TREND_NEUTRAL)
-    {
-        Print("❌ Market RANGING: MAs tangled/compressed (TREND_NEUTRAL)");
-        return true;
-    }
-    
-    if((isBuy && trend == TREND_WEAK_BULLISH) || 
-       (!isBuy && trend == TREND_WEAK_BEARISH))
-    {
-        PrintFormat("❌ Market RANGING: Weak trend (%s)", EnumToString(trend));
-        return true;
-    }
-    
-    // Check MA alignment
-    const int symbolIndex = ArrayPosition(symbol);
-    if(symbolIndex == -1) return true;
-    
-    const double fast = GetCurrentMAValue(fastMA_M15[symbolIndex]);
-    const double med = GetCurrentMAValue(mediumMA_M15[symbolIndex]);
-    const double slow = GetCurrentMAValue(slowMA_M15[symbolIndex]);
-    const double price = SymbolInfoDouble(symbol, SYMBOL_BID);
-    
-    const double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-    const double maScore = GetMAAlignmentScore(symbol, isBuy);
-    
-    // Dynamic threshold based on trend strength
-    double minScore = 45.0;
-    
-    if(trend == TREND_STRONG_BULLISH || trend == TREND_STRONG_BEARISH)
-    {
-        minScore = 60.0;
-        Print("Strong trend detected - lowering MA score requirement to 55%");
-    }
-    else if(trend == TREND_MODERATE_BULLISH || trend == TREND_MODERATE_BEARISH)
-    {
-        minScore = 55.0;
-    }
-    else
-    {
-        minScore = 65.0;
-    }
-    
-    if(maScore < minScore)
-    {
-        PrintFormat("❌ Market RANGING: MA alignment too weak (%.1f%% < %.1f%%)", 
-                   maScore, minScore);
-        
-        if(maScore < 30.0)
-        {
-            Print("   Major alignment issues - MAs are tangled");
-        }
-        else if(maScore < 40.0)
-        {
-            Print("   Poor alignment - Wait for better MA structure");
-        }
-        
-        return true;
-    }
-    
-    PrintFormat("✅ MA Alignment Score: %.1f%% (≥ %.1f%%)", maScore, minScore);
-    
-    // Check price position
-    if(isBuy && price < med)
-    {
-        PrintFormat("❌ Market RANGING: Price (%.5f) below medium MA (%.5f)", price, med);
-        return true;
-    }
-    
-    if(!isBuy && price > med)
-    {
-        PrintFormat("❌ Market RANGING: Price (%.5f) above medium MA (%.5f)", price, med);
-        return true;
-    }
-    
-    // Check timing
-    // const double priceFastDistance = MathAbs(price - fast) / point;
-    // if(priceFastDistance > 30.0)
-    // {
-    //     PrintFormat("⚠️ Timing Warning: Price far from Fast MA (%.1f pips)", priceFastDistance);
-    //     Print("   Consider waiting for pullback/bounce for better entry");
-    // }
-    
-    // Final trend validation
-    const TradeSignal signal = ValidateM15Trade(symbol, isBuy);
-    
-    if(!signal.isValid)
-    {
-        PrintFormat("❌ Market RANGING: %s", signal.reason);
-        return true;
-    }
-    
-    PrintFormat("✅ Market NOT ranging - Good for %s trades", isBuy ? "BUY" : "SELL");
-    PrintFormat("   Trend: %s", EnumToString(trend));
-    PrintFormat("   MA Alignment Score: %.1f%%", maScore);
-    PrintFormat("   Signal Confidence: %.1f%%", signal.confidence);
-    
-    return false;
+    return IsMarketRangingByMADistance(symbol, isBuy);
 }
 
 //+------------------------------------------------------------------+
@@ -857,45 +767,148 @@ TradeSignal ValidateM15Trade(const string symbol, const bool isBuy)
 }
 
 //+------------------------------------------------------------------+
-//| Get M15 Trend Strength                                          |
+//| GetM15TrendStrength - COMPLETE DEBUG VERSION                    |
 //+------------------------------------------------------------------+
 ENUM_TREND_STRENGTH GetM15TrendStrength(const string symbol)
 {
-    const int symbolIndex = ArrayPosition(symbol);
-    if(symbolIndex == -1) return TREND_NEUTRAL;
+    Print("\n=== GetM15TrendStrength DEBUG START ===");
+    Print("Analyzing symbol: ", symbol);
     
+    const int symbolIndex = ArrayPosition(symbol);
+    if(symbolIndex == -1) 
+    {
+        Print("ERROR: Symbol not found in active symbols array");
+        Print("Active symbols count: ", totalSymbols);
+        for(int i = 0; i < totalSymbols; i++) {
+            Print("  ", i, ": ", activeSymbols[i]);
+        }
+        Print("=== GetM15TrendStrength DEBUG END ===\n");
+        return TREND_NEUTRAL;
+    }
+    
+    Print("Symbol index: ", symbolIndex);
+    Print("fastMA_M15 handle: ", fastMA_M15[symbolIndex]);
+    Print("mediumMA_M15 handle: ", mediumMA_M15[symbolIndex]);
+    Print("slowMA_M15 handle: ", slowMA_M15[symbolIndex]);
+    
+    // Get MA values
     const double fast = GetCurrentMAValue(fastMA_M15[symbolIndex]);
     const double med = GetCurrentMAValue(mediumMA_M15[symbolIndex]);
     const double slow = GetCurrentMAValue(slowMA_M15[symbolIndex]);
     
-    const double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-    const double fastMedDist = MathAbs(fast - med) / point;
-    const double medSlowDist = MathAbs(med - slow) / point;
+    PrintFormat("\nMA Values:");
+    PrintFormat("  Fast MA (Period %d): %.5f", FastMA_Period, fast);
+    PrintFormat("  Med MA (Period %d):  %.5f", MediumMA_Period, med);
+    PrintFormat("  Slow MA (Period %d): %.5f", SlowMA_Period, slow);
     
-    const bool bullStack = (fast > med) && (med > slow);
-    const bool bearStack = (fast < med) && (med < slow);
+    // Calculate point and pip size
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+    double pipSize = (digits == 5 || digits == 3) ? (point * 10) : point;
     
+    PrintFormat("\nMarket Info:");
+    PrintFormat("  Point: %.5f", point);
+    PrintFormat("  Digits: %d", digits);
+    PrintFormat("  Pip Size: %.5f", pipSize);
+    
+    // Calculate distances
+    double fastMedDist = MathAbs(fast - med) / pipSize;
+    double medSlowDist = MathAbs(med - slow) / pipSize;
+    double fastSlowDist = MathAbs(fast - slow) / pipSize;
+    double totalSpreadPoints = MathAbs(fast - slow) / point;
+    
+    PrintFormat("\nDistances:");
+    PrintFormat("  Fast-Med:   %.1f pips (%.0f points)", fastMedDist, fastMedDist * 10);
+    PrintFormat("  Med-Slow:   %.1f pips (%.0f points)", medSlowDist, medSlowDist * 10);
+    PrintFormat("  Fast-Slow:  %.1f pips (%.0f points)", fastSlowDist, fastSlowDist * 10);
+    PrintFormat("  Total Spread: %.0f points", totalSpreadPoints);
+    
+    // Check MA stack conditions
+    bool bullStack = (fast > med) && (med > slow);
+    bool bearStack = (fast < med) && (med < slow);
+    bool mixed1 = (fast > med && med < slow);
+    bool mixed2 = (fast < med && med > slow);
+    
+    PrintFormat("\nMA Stack Analysis:");
+    PrintFormat("  Bull Stack (fast>med>slow): %s", bullStack ? "YES ✅" : "NO ❌");
+    PrintFormat("  Bear Stack (fast<med<slow): %s", bearStack ? "YES ✅" : "NO ❌");
+    PrintFormat("  Mixed 1 (fast>med<slow):    %s", mixed1 ? "YES ⚠️" : "NO");
+    PrintFormat("  Mixed 2 (fast<med>slow):    %s", mixed2 ? "YES ⚠️" : "NO");
+    
+    // ORIGINAL LOGIC CHECKS (from your code)
+    PrintFormat("\n=== ORIGINAL LOGIC CHECKS ===");
+    
+    // Check 1: Perfect stack conditions
     if(bullStack)
     {
-        if(fastMedDist > 40.0 && medSlowDist > 40.0) return TREND_STRONG_BULLISH;
-        if(fastMedDist > 20.0 && medSlowDist > 20.0) return TREND_MODERATE_BULLISH;
+        if(fastMedDist > 40.0 && medSlowDist > 40.0) 
+        {
+            PrintFormat("✅ Bull Stack: STRONG_BULLISH (both gaps > 40 pips)");
+            Print("=== GetM15TrendStrength DEBUG END ===\n");
+            return TREND_STRONG_BULLISH;
+        }
+        if(fastMedDist > 20.0 && medSlowDist > 20.0) 
+        {
+            PrintFormat("✅ Bull Stack: MODERATE_BULLISH (both gaps > 20 pips)");
+            Print("=== GetM15TrendStrength DEBUG END ===\n");
+            return TREND_MODERATE_BULLISH;
+        }
+        PrintFormat("⚠️ Bull Stack: WEAK_BULLISH (gaps too small: %.1f, %.1f pips)", fastMedDist, medSlowDist);
+        Print("=== GetM15TrendStrength DEBUG END ===\n");
         return TREND_WEAK_BULLISH;
     }
     else if(bearStack)
     {
-        if(fastMedDist > 40.0 && medSlowDist > 40.0) return TREND_STRONG_BEARISH;
-        if(fastMedDist > 20.0 && medSlowDist > 20.0) return TREND_MODERATE_BEARISH;
+        if(fastMedDist > 40.0 && medSlowDist > 40.0) 
+        {
+            PrintFormat("✅ Bear Stack: STRONG_BEARISH (both gaps > 40 pips)");
+            Print("=== GetM15TrendStrength DEBUG END ===\n");
+            return TREND_STRONG_BEARISH;
+        }
+        if(fastMedDist > 20.0 && medSlowDist > 20.0) 
+        {
+            PrintFormat("✅ Bear Stack: MODERATE_BEARISH (both gaps > 20 pips)");
+            Print("=== GetM15TrendStrength DEBUG END ===\n");
+            return TREND_MODERATE_BEARISH;
+        }
+        PrintFormat("⚠️ Bear Stack: WEAK_BEARISH (gaps too small: %.1f, %.1f pips)", fastMedDist, medSlowDist);
+        Print("=== GetM15TrendStrength DEBUG END ===\n");
         return TREND_WEAK_BEARISH;
     }
     
-    const double totalSpread = MathAbs(fast - slow) / point;
-    if(totalSpread < 100.0) return TREND_NEUTRAL;
-    
-    if((fast > med && med < slow) || (fast < med && med > slow))
+    // Check 2: Original total spread check (line 403 in your code)
+    PrintFormat("\nChecking total spread: %.0f points < 100.0 points?", totalSpreadPoints);
+    if(totalSpreadPoints < 100.0) 
     {
+        PrintFormat("❌ NEUTRAL: Total spread too small (%.0f points < 100 points)", totalSpreadPoints);
+        Print("=== GetM15TrendStrength DEBUG END ===\n");
         return TREND_NEUTRAL;
     }
+    else
+    {
+        PrintFormat("✅ Total spread OK: %.0f points ≥ 100 points", totalSpreadPoints);
+    }
     
+    // Check 3: Mixed signal check (lines 405-408 in your code)
+    PrintFormat("\nChecking mixed signals:");
+    if(mixed1 || mixed2)
+    {
+        PrintFormat("❌ NEUTRAL: Mixed MA signals detected");
+        Print("=== GetM15TrendStrength DEBUG END ===\n");
+        return TREND_NEUTRAL;
+    }
+    else
+    {
+        PrintFormat("✅ No mixed signals detected");
+    }
+    
+    // If we get here, something is wrong with the logic
+    PrintFormat("\n⚠️ UNEXPECTED: Logic fell through all checks!");
+    PrintFormat("  fastSlowDist: %.1f pips", fastSlowDist);
+    PrintFormat("  bullStack: %s, bearStack: %s", bullStack ? "YES" : "NO", bearStack ? "YES" : "NO");
+    PrintFormat("  mixed1: %s, mixed2: %s", mixed1 ? "YES" : "NO", mixed2 ? "YES" : "NO");
+    
+    Print("=== GetM15TrendStrength DEBUG END ===\n");
     return TREND_NEUTRAL;
 }
 
@@ -1115,6 +1128,14 @@ string GetValidationSummary(const string symbol, const bool isBuy)
 
 bool BarAlreadyTraded(const string symbol, const bool isBuy, ENUM_TIMEFRAMES tf = PERIOD_H1)
 {
+    // if(BarAlreadyTraded(...)) return false;
+    // is not sufficient unless your BarAlreadyTraded() does ALL of the following:
+    // Tracks trades per direction (buy and sell separately)
+    // Tracks trade state per timeframe correctly
+    // Resets when the new candle opens
+    // Survives EA restart or reconnection
+    // Correctly maps bars across timeframes
+
     // === GET CURRENT BAR TIME ===
     datetime currentBarTime = iTime(symbol, tf, 0);
     
@@ -1187,3 +1208,403 @@ void ResetBarTracking()
     g_SellTradedThisBar = false;
     Print("BAR_TRACKER: Tracking completely reset");
 }
+
+// //+------------------------------------------------------------------+
+// //| COMPLETE DebugRangeDetection Function                          |
+// //+------------------------------------------------------------------+
+// void DebugRangeDetection(const string symbol)
+// {
+//     Print("\n" + StringRepeat("=", 60));
+//     Print("🎯 RANGE DETECTION DEBUG - COMPLETE ANALYSIS");
+//     Print(StringRepeat("=", 60));
+    
+//     // 1. BASIC SYMBOL INFO
+//     Print("\n📊 1. SYMBOL INFORMATION:");
+//     Print("   Symbol: ", symbol);
+//     Print("   Current Time: ", TimeToString(TimeCurrent(), TIME_SECONDS));
+    
+//     double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
+//     double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
+//     double spread = (ask - bid) / SymbolInfoDouble(symbol, SYMBOL_POINT);
+//     PrintFormat("   Bid: %.5f, Ask: %.5f, Spread: %.0f points", bid, ask, spread);
+    
+//     // 2. CHECK SYMBOL POSITION
+//     Print("\n📊 2. SYMBOL POSITION CHECK:");
+//     const int symbolIndex = ArrayPosition(symbol);
+//     if(symbolIndex == -1)
+//     {
+//         Print("   ❌ ERROR: Symbol not found in active symbols!");
+//         Print("   Total active symbols: ", totalSymbols);
+//         for(int i = 0; i < totalSymbols; i++) {
+//             PrintFormat("     [%d] %s", i, activeSymbols[i]);
+//         }
+//         Print(StringRepeat("=", 60));
+//         return;
+//     }
+//     PrintFormat("   ✅ Symbol found at index: %d", symbolIndex);
+    
+//     // 3. MA HANDLES CHECK
+//     Print("\n📊 3. MA HANDLE STATUS:");
+//     PrintFormat("   fastMA_M15[%d]: %d", symbolIndex, fastMA_M15[symbolIndex]);
+//     PrintFormat("   mediumMA_M15[%d]: %d", symbolIndex, mediumMA_M15[symbolIndex]);
+//     PrintFormat("   slowMA_M15[%d]: %d", symbolIndex, slowMA_M15[symbolIndex]);
+    
+//     if(fastMA_M15[symbolIndex] == INVALID_HANDLE || 
+//        mediumMA_M15[symbolIndex] == INVALID_HANDLE || 
+//        slowMA_M15[symbolIndex] == INVALID_HANDLE)
+//     {
+//         Print("   ❌ ERROR: One or more MA handles are INVALID!");
+//         Print(StringRepeat("=", 60));
+//         return;
+//     }
+//     Print("   ✅ All MA handles are valid");
+    
+//     // 4. GET MA VALUES
+//     Print("\n📊 4. MOVING AVERAGE VALUES:");
+//     const double fast = GetCurrentMAValue(fastMA_M15[symbolIndex]);
+//     const double med = GetCurrentMAValue(mediumMA_M15[symbolIndex]);
+//     const double slow = GetCurrentMAValue(slowMA_M15[symbolIndex]);
+    
+//     PrintFormat("   Fast MA (Period %d):  %.5f", FastMA_Period, fast);
+//     PrintFormat("   Medium MA (Period %d): %.5f", MediumMA_Period, med);
+//     PrintFormat("   Slow MA (Period %d):   %.5f", SlowMA_Period, slow);
+    
+//     // 5. CALCULATE DISTANCES
+//     Print("\n📊 5. DISTANCE CALCULATIONS:");
+//     double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+//     int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+//     double pipSize = (digits == 5 || digits == 3) ? (point * 10) : point;
+    
+//     double fastMedDist = MathAbs(fast - med) / pipSize;
+//     double medSlowDist = MathAbs(med - slow) / pipSize;
+//     double fastSlowDist = MathAbs(fast - slow) / pipSize;
+//     double totalSpreadPoints = MathAbs(fast - slow) / point;
+    
+//     PrintFormat("   Point Size: %.5f", point);
+//     PrintFormat("   Digits: %d", digits);
+//     PrintFormat("   Pip Size: %.5f", pipSize);
+//     PrintFormat("\n   Fast-Med Distance:   %.1f pips", fastMedDist);
+//     PrintFormat("   Med-Slow Distance:   %.1f pips", medSlowDist);
+//     PrintFormat("   Fast-Slow Distance:  %.1f pips", fastSlowDist);
+//     PrintFormat("   Total Spread:        %.0f points", totalSpreadPoints);
+    
+//     // 6. MA STACK ANALYSIS
+//     Print("\n📊 6. MA STACK ANALYSIS:");
+//     bool bullStack = (fast > med) && (med > slow);
+//     bool bearStack = (fast < med) && (med < slow);
+//     bool mixed1 = (fast > med && med < slow);
+//     bool mixed2 = (fast < med && med > slow);
+//     bool flatStack = (MathAbs(fast - med) < pipSize * 5) && 
+//                      (MathAbs(med - slow) < pipSize * 5);
+    
+//     PrintFormat("   Bullish Stack:       %s", bullStack ? "✅ YES" : "❌ NO");
+//     PrintFormat("   Bearish Stack:       %s", bearStack ? "✅ YES" : "❌ NO");
+//     PrintFormat("   Mixed Signal 1:      %s", mixed1 ? "⚠️ YES" : "NO");
+//     PrintFormat("   Mixed Signal 2:      %s", mixed2 ? "⚠️ YES" : "NO");
+//     PrintFormat("   Flat/Ranging:        %s", flatStack ? "⚠️ YES" : "NO");
+    
+//     // 7. THRESHOLD CHECKS
+//     Print("\n📊 7. THRESHOLD CHECKS:");
+    
+//     // Check 1: Original 100-point spread check
+//     PrintFormat("   Check 1: Total Spread < 100 points?");
+//     PrintFormat("     Value: %.0f points %s 100 points", 
+//                 totalSpreadPoints, 
+//                 totalSpreadPoints < 100.0 ? "< ❌" : ">= ✅");
+    
+//     // Check 2: Your hierarchical MA gaps (for reference)
+//     PrintFormat("\n   Check 2: Hierarchical MA Gaps (for reference):");
+//     PrintFormat("     5-9 MA gap:   ? pips (should be ~500+)");
+//     PrintFormat("     9-21 MA gap:  ? pips (should be ~900+)");
+//     PrintFormat("     21-89 MA gap: ? pips (should be ~2000+)");
+//     Print("     Note: These are different from M15 MAs above!");
+    
+//     // Check 3: Trend strength based on distances
+//     PrintFormat("\n   Check 3: Trend Strength Classification:");
+//     if(fastSlowDist > 80.0) {
+//         Print("     📈 STRONG TREND: >80 pips total separation");
+//     } else if(fastSlowDist > 40.0) {
+//         Print("     📊 MODERATE TREND: 40-80 pips separation");
+//     } else if(fastSlowDist > 20.0) {
+//         Print("     📉 WEAK TREND: 20-40 pips separation");
+//     } else {
+//         Print("     ↔️ RANGING: <20 pips separation");
+//     }
+    
+//     // 8. FINAL TREND DETECTION
+//     Print("\n📊 8. FINAL TREND DETECTION:");
+//     ENUM_TREND_STRENGTH trend = GetM15TrendStrength(symbol);
+//     string trendString = EnumToString(trend);
+    
+//     // Color code the result
+//     if(trend == TREND_NEUTRAL) {
+//         trendString = "❌ " + trendString + " (RANGING)";
+//     } else if(trend == TREND_STRONG_BULLISH || trend == TREND_STRONG_BEARISH) {
+//         trendString = "✅ " + trendString + " (STRONG TREND)";
+//     } else if(trend == TREND_MODERATE_BULLISH || trend == TREND_MODERATE_BEARISH) {
+//         trendString = "⚠️ " + trendString + " (MODERATE TREND)";
+//     } else {
+//         trendString = "🔸 " + trendString + " (WEAK TREND)";
+//     }
+    
+//     PrintFormat("   GetM15TrendStrength() returns: %s", trendString);
+    
+//     // 9. RECOMMENDATION
+//     Print("\n📊 9. RECOMMENDATION:");
+//     if(trend == TREND_NEUTRAL || trend == TREND_WEAK_BULLISH || trend == TREND_WEAK_BEARISH) {
+//         Print("   ⚠️ CAUTION: Market may be ranging or trend is too weak");
+//         Print("   Consider waiting for stronger trend confirmation");
+//     } else {
+//         Print("   ✅ Market appears to be trending");
+//         Print("   Trading may be acceptable if other validations pass");
+//     }
+    
+//     Print(StringRepeat("=", 60));
+// }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Below is the **full upgraded, production-grade version** of your `BarAlreadyTraded` system.
+// It includes:
+
+// 1. Persistence across EA restart
+// 2. Correct per-direction tracking
+// 3. Correct per-bar trade counting
+// 4. Terminal-level global variables
+// 5. Clean, deterministic integration with your trade executor
+// 6. Logging that will actually show you what is happening
+
+// After the code, I will answer your second question about the *executor logic* and why yes — you should start there first.
+
+// ---
+
+// # 1. FULL UPGRADED VERSION (copy-paste ready)
+
+// ## **A) Global State (put in GlobalVariables.mqh or top of EA)**
+
+// ```cpp
+// // Persistent keys (unique per symbol + timeframe)
+// string KeyLastBarBuy(const string symbol, ENUM_TIMEFRAMES tf)
+// {
+//     return symbol + "_BUY_LAST_BAR_" + IntegerToString((int)tf);
+// }
+
+// string KeyLastBarSell(const string symbol, ENUM_TIMEFRAMES tf)
+// {
+//     return symbol + "_SELL_LAST_BAR_" + IntegerToString((int)tf);
+// }
+
+// string KeyTradesCount(const string symbol, ENUM_TIMEFRAMES tf)
+// {
+//     return symbol + "_TRADES_COUNT_" + IntegerToString((int)tf);
+// }
+
+// // In-memory trackers
+// datetime g_LastBarTime = 0;
+// int g_TradesCountThisBar = 0;
+// bool g_BuyTradedThisBar = false;
+// bool g_SellTradedThisBar = false;
+// ```
+
+// ---
+
+// ## **B) INITIALIZATION (call on EA init or first tick)**
+
+// ```cpp
+// void InitBarTracker(const string symbol, ENUM_TIMEFRAMES tf)
+// {
+//     // Load persistent values or initialize
+//     if(!GlobalVariableCheck(KeyTradesCount(symbol, tf)))
+//         GlobalVariableSet(KeyTradesCount(symbol, tf), 0);
+    
+//     if(!GlobalVariableCheck(KeyLastBarBuy(symbol, tf)))
+//         GlobalVariableSet(KeyLastBarBuy(symbol, tf), 0);
+    
+//     if(!GlobalVariableCheck(KeyLastBarSell(symbol, tf)))
+//         GlobalVariableSet(KeyLastBarSell(symbol, tf), 0);
+
+//     Print("BAR_TRACKER_INIT: Persistent keys ready.");
+// }
+// ```
+
+// Call it once in `OnInit()`:
+
+// ```cpp
+// InitBarTracker(TradeSymbol, TradeLimitTimeframe);
+// ```
+
+// ---
+
+// ## **C) THE NEW BarAlreadyTraded() — FINAL VERSION**
+
+// ```cpp
+// bool BarAlreadyTraded(const string symbol, const bool isBuy, ENUM_TIMEFRAMES tf)
+// {
+//     datetime barTime = iTime(symbol, tf, 0);
+
+//     // Detect new bar
+//     if(barTime != g_LastBarTime)
+//     {
+//         g_LastBarTime = barTime;
+
+//         // Load persisted count for this bar if exists
+//         g_TradesCountThisBar = (int)GlobalVariableGet(KeyTradesCount(symbol, tf));
+
+//         // Load buy/sell last-bar timestamps
+//         datetime lastBuyBar  = (datetime)GlobalVariableGet(KeyLastBarBuy(symbol, tf));
+//         datetime lastSellBar = (datetime)GlobalVariableGet(KeyLastBarSell(symbol, tf));
+
+//         g_BuyTradedThisBar  = (lastBuyBar  == barTime);
+//         g_SellTradedThisBar = (lastSellBar == barTime);
+
+//         PrintFormat("BAR_TRACKER: New bar %s. BuyFlag=%s SellFlag=%s Count=%d",
+//             TimeToString(barTime), 
+//             g_BuyTradedThisBar?"TRUE":"FALSE",
+//             g_SellTradedThisBar?"TRUE":"FALSE",
+//             g_TradesCountThisBar);
+//     }
+
+//     // === CHECK LIMITS ===
+//     if(g_TradesCountThisBar >= MaxTradesPerBar)
+//     {
+//         Print("BAR_TRACKER_BLOCK: Max trades per bar reached.");
+//         return true;
+//     }
+
+//     if(isBuy && g_BuyTradedThisBar)
+//     {
+//         Print("BAR_TRACKER_BLOCK: BUY already traded this bar.");
+//         return true;
+//     }
+
+//     if(!isBuy && g_SellTradedThisBar)
+//     {
+//         Print("BAR_TRACKER_BLOCK: SELL already traded this bar.");
+//         return true;
+//     }
+
+//     return false;
+// }
+// ```
+
+// ---
+
+// ## **D) THE REQUIRED UPDATE FUNCTION (call AFTER successful trade open)**
+
+// ```cpp
+// void RegisterBarTrade(const string symbol, const bool isBuy, ENUM_TIMEFRAMES tf)
+// {
+//     datetime barTime = iTime(symbol, tf, 0);
+
+//     g_TradesCountThisBar++;
+//     GlobalVariableSet(KeyTradesCount(symbol, tf), g_TradesCountThisBar);
+
+//     if(isBuy)
+//     {
+//         g_BuyTradedThisBar = true;
+//         GlobalVariableSet(KeyLastBarBuy(symbol, tf), barTime);
+//     }
+//     else
+//     {
+//         g_SellTradedThisBar = true;
+//         GlobalVariableSet(KeyLastBarSell(symbol, tf), barTime);
+//     }
+
+//     PrintFormat("BAR_TRACKER_UPDATE: Trade registered (%s). Count=%d Bar=%s",
+//         isBuy?"BUY":"SELL",
+//         g_TradesCountThisBar,
+//         TimeToString(barTime));
+// }
+// ```
+
+// ---
+
+// ## **E) HOW TO USE IT IN YOUR EXECUTOR**
+
+// This must be the pattern:
+
+// ```cpp
+// if(BarAlreadyTraded(symbol, isBuy, TradeLimitTimeframe))
+//     return false;
+
+// if(ExecuteOrder(symbol, isBuy, volume))
+// {
+//     RegisterBarTrade(symbol, isBuy, TradeLimitTimeframe);
+//     return true;
+// }
+// ```
+
+// Never update inside BarAlreadyTraded().
+// Always update **after a confirmed execution**.
+
+// ---
+
+// # 2. Your second question:
+
+// ## “Isn’t it better to start with what is causing the problem inside the executor? The logic?”
+
+// Yes — 100%.
+
+// **Bar restriction logic is only a symptom filter.
+// The real cause is inside your executor logic.**
+
+// ### The real reasons bots double-enter are:
+
+// 1. **Signal triggers multiple times within the same candle**
+// 2. **Executor logic checks conditions multiple times**
+// 3. **Executor executes both instant and pending logic on same tick**
+// 4. **Conditions flip true → false → true within the same bar**
+// 5. **You evaluate MAs on live ticks, not candle close**
+// 6. **Your “no uptrend” or “no trend confirmed” logic is too strict/too sensitive**
+
+// If you patch the bar-limit first, you hide the bug.
+// If you fix the executor logic first, you eliminate the bug.
+
+// ### The correct order:
+
+// 1. **Fix signal logic → stable trend detection → correct trigger conditions**
+// 2. **Stabilize executor → ensure one valid signal = one execution**
+// 3. **Apply bar-limit as a safety shield**
+
+// This gives:
+
+// * cleaner logs
+// * consistent entries
+// * less patchwork
+// * far fewer duplicates
+// * easier debugging
+
+// ---
+
+// # 3. If you want, I can now do:
+
+// * A full audit of your **executor logic**
+// * Rebuild your **trend detection**
+// * Fix your **MA inversion / no-trend bug**
+// * Reconstruct a robust entry trigger system
+// * Show you exact points where your bot fails to detect uptrend/downtrend
+
+// Just tell me which file you want reviewed first.

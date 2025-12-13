@@ -171,110 +171,6 @@ void ClosePositionType(string symbol, int positionType = -1)
     }
 }
 
-//+------------------------------------------------------------------+
-//| CloseBiggestLosingPosition - Close position with biggest loss   |
-//+------------------------------------------------------------------+
-bool CloseBiggestLosingPosition(string &outClosedSymbol)
-{
-    double biggestLoss = 0;
-    ulong ticketToClose = 0;
-    string symbolToClose = "";
-    
-    // ============ 1. FIND BIGGEST LOSING POSITION ============
-    for(int i = PositionsTotal() - 1; i >= 0; i--)
-    {
-        ulong ticket = PositionGetTicket(i);
-        if(ticket <= 0) continue;
-        
-        if(PositionSelectByTicket(ticket))
-        {
-            double profit = PositionGetDouble(POSITION_PROFIT);
-            
-            if(profit < biggestLoss) // More negative = bigger loss
-            {
-                biggestLoss = profit;
-                ticketToClose = ticket;
-                symbolToClose = PositionGetString(POSITION_SYMBOL);
-            }
-        }
-    }
-    
-    // ============ 2. CLOSE THE POSITION ============
-    if(ticketToClose > 0)
-    {
-        bool result = trade.PositionClose(ticketToClose);
-        
-        if(result)
-        {
-            outClosedSymbol = symbolToClose;
-            
-            Print("CLOSED: Biggest losing position for ", symbolToClose,
-                  " | Loss: $", DoubleToString(biggestLoss, 2),
-                  " | Ticket: ", ticketToClose);
-            
-            // Update trade direction tracking
-            UpdateTradeDirection(symbolToClose);
-        }
-        
-        return result;
-    }
-    
-    outClosedSymbol = "";
-    return false;
-}
-
-//+------------------------------------------------------------------+
-//| CloseSmallestPosition - Close position with smallest volume     |
-//+------------------------------------------------------------------+
-bool CloseSmallestPosition(string &outClosedSymbol)
-{
-    double smallestVolume = DBL_MAX;
-    ulong ticketToClose = 0;
-    string symbolToClose = "";
-    
-    // ============ 1. FIND SMALLEST POSITION ============
-    for(int i = PositionsTotal() - 1; i >= 0; i--)
-    {
-        ulong ticket = PositionGetTicket(i);
-        if(ticket <= 0) continue;
-        
-        if(PositionSelectByTicket(ticket))
-        {
-            double volume = PositionGetDouble(POSITION_VOLUME);
-            
-            if(volume < smallestVolume)
-            {
-                smallestVolume = volume;
-                ticketToClose = ticket;
-                symbolToClose = PositionGetString(POSITION_SYMBOL);
-            }
-        }
-    }
-    
-    // ============ 2. CLOSE THE POSITION ============
-    if(ticketToClose > 0)
-    {
-        bool result = trade.PositionClose(ticketToClose);
-        
-        if(result)
-        {
-            outClosedSymbol = symbolToClose;
-            
-            Print("CLOSED: Smallest position for ", symbolToClose,
-                  " | Volume: ", DoubleToString(smallestVolume, 2),
-                  " | Ticket: ", ticketToClose);
-            
-            // Update trade direction tracking
-            UpdateTradeDirection(symbolToClose);
-        }
-        
-        return result;
-    }
-    
-    outClosedSymbol = "";
-    return false;
-}
-
 // ============ SUPPORT FUNCTIONS ============
 
 bool PreTradeValidation(string symbol, double lotSize, double stopLoss, double takeProfit)
@@ -423,6 +319,669 @@ bool CheckMarginRequirement(string symbol, double lotSize)
     }
     
     return true;
+}
+
+//+------------------------------------------------------------------+
+//| CloseBiggestLosingPosition - Close position with biggest loss   |
+//| FIXED: Correct initialization and filtering                     |
+//+------------------------------------------------------------------+
+bool CloseBiggestLosingPosition(string &outClosedSymbol)
+{
+    double biggestLoss = DBL_MAX;  // Start with VERY LARGE positive number
+    ulong ticketToClose = 0;
+    string symbolToClose = "";
+    bool foundLoss = false;
+    
+    Print("=== CLOSE BIGGEST LOSING POSITION START ===");
+    Print("Total positions: ", PositionsTotal());
+    
+    // ============ 1. FIND BIGGEST LOSING POSITION ============
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket <= 0) continue;
+        
+        if(PositionSelectByTicket(ticket))
+        {
+            string symbol = PositionGetString(POSITION_SYMBOL);
+            double profit = PositionGetDouble(POSITION_PROFIT);
+            double volume = PositionGetDouble(POSITION_VOLUME);
+            
+            Print("Checking position ", i, ": ", symbol, 
+                  " | Profit: $", DoubleToString(profit, 2),
+                  " | Volume: ", DoubleToString(volume, 2));
+            
+            // ONLY consider LOSING positions (profit < 0)
+            if(profit < 0)
+            {
+                foundLoss = true;
+                
+                // Compare losses: -50 is WORSE than -10 (more negative)
+                if(profit < biggestLoss)
+                {
+                    biggestLoss = profit;
+                    ticketToClose = ticket;
+                    symbolToClose = symbol;
+                    
+                    Print("NEW BIGGEST LOSS: ", symbol, 
+                          " | Loss: $", DoubleToString(profit, 2));
+                }
+            }
+        }
+    }
+    
+    // ============ 2. CHECK IF WE SHOULD CLOSE ============
+    if(!foundLoss)
+    {
+        Print("No losing positions found. Nothing to close.");
+        outClosedSymbol = "";
+        return false;
+    }
+    
+    // ============ 3. ADD SAFETY CHECKS ============
+    if(ticketToClose <= 0 || symbolToClose == "")
+    {
+        Print("ERROR: Invalid position selected for closing");
+        outClosedSymbol = "";
+        return false;
+    }
+    
+    // Get final position details before closing
+    if(PositionSelectByTicket(ticketToClose))
+    {
+        double finalProfit = PositionGetDouble(POSITION_PROFIT);
+        double finalVolume = PositionGetDouble(POSITION_VOLUME);
+        
+        Print("PRE-CLOSE CHECK: ", symbolToClose,
+              " | Ticket: ", ticketToClose,
+              " | Loss: $", DoubleToString(finalProfit, 2),
+              " | Volume: ", DoubleToString(finalVolume, 2));
+    }
+    
+    // ============ 4. CLOSE THE POSITION ============
+    Print("Attempting to close biggest losing position: ", 
+          symbolToClose, " | Ticket: ", ticketToClose);
+    
+    bool result = trade.PositionClose(ticketToClose);
+    
+    if(result)
+    {
+        outClosedSymbol = symbolToClose;
+        
+        Print("SUCCESS: Closed biggest losing position");
+        Print("  Symbol: ", symbolToClose);
+        Print("  Loss: $", DoubleToString(biggestLoss, 2));
+        Print("  Ticket: ", ticketToClose);
+        
+        // Update trade direction tracking
+        UpdateTradeDirection(symbolToClose);
+        
+        // Optional: Add delay to prevent immediate re-entry
+        Sleep(100);
+    }
+    else
+    {
+        Print("FAILED: Could not close position ", ticketToClose);
+        Print("Error: ", trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription());
+        outClosedSymbol = "";
+    }
+    
+    Print("=== CLOSE BIGGEST LOSING POSITION END ===");
+    
+    return result;
+}
+
+//+------------------------------------------------------------------+
+//| CloseSmallestProfitPosition - Close position with smallest gain |
+//| Returns true if closed successfully, false otherwise             |
+//+------------------------------------------------------------------+
+bool CloseSmallestProfitPosition(string &outClosedSymbol)
+{
+    double smallestProfit = DBL_MAX;  // Start with VERY LARGE positive
+    ulong ticketToClose = 0;
+    string symbolToClose = "";
+    bool foundPosition = false;
+    
+    Print("=== CLOSE SMALLEST PROFIT POSITION START ===");
+    Print("Total positions: ", PositionsTotal());
+    
+    // ============ 1. FIND POSITION WITH SMALLEST PROFIT ============
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket <= 0) continue;
+        
+        if(PositionSelectByTicket(ticket))
+        {
+            string symbol = PositionGetString(POSITION_SYMBOL);
+            double profit = PositionGetDouble(POSITION_PROFIT);
+            double volume = PositionGetDouble(POSITION_VOLUME);
+            ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+            
+            Print("Checking position ", i, ": ", symbol, 
+                  " | Type: ", (type == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+                  " | Profit: $", DoubleToString(profit, 2),
+                  " | Volume: ", DoubleToString(volume, 2));
+            
+            // Consider ALL positions (profit or loss)
+            foundPosition = true;
+            
+            // Compare absolute profit value (smallest = closest to zero)
+            if(MathAbs(profit) < MathAbs(smallestProfit))
+            {
+                smallestProfit = profit;
+                ticketToClose = ticket;
+                symbolToClose = symbol;
+                
+                Print("NEW SMALLEST PROFIT: ", symbol, 
+                      " | Profit: $", DoubleToString(profit, 2));
+            }
+        }
+    }
+    
+    // ============ 2. CHECK IF WE SHOULD CLOSE ============
+    if(!foundPosition)
+    {
+        Print("No positions found. Nothing to close.");
+        outClosedSymbol = "";
+        return false;
+    }
+    
+    // ============ 3. ADD SAFETY CHECKS ============
+    if(ticketToClose <= 0 || symbolToClose == "")
+    {
+        Print("ERROR: Invalid position selected for closing");
+        outClosedSymbol = "";
+        return false;
+    }
+    
+    // Get final position details before closing
+    if(PositionSelectByTicket(ticketToClose))
+    {
+        double finalProfit = PositionGetDouble(POSITION_PROFIT);
+        double finalVolume = PositionGetDouble(POSITION_VOLUME);
+        ENUM_POSITION_TYPE finalType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+        
+        Print("PRE-CLOSE CHECK: ", symbolToClose,
+              " | Type: ", (finalType == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+              " | Ticket: ", ticketToClose,
+              " | Profit: $", DoubleToString(finalProfit, 2),
+              " | Volume: ", DoubleToString(finalVolume, 2));
+    }
+    
+    // ============ 4. CLOSE THE POSITION ============
+    Print("Attempting to close smallest profit position: ", 
+          symbolToClose, " | Ticket: ", ticketToClose);
+    
+    bool result = trade.PositionClose(ticketToClose);
+    
+    if(result)
+    {
+        outClosedSymbol = symbolToClose;
+        
+        Print("SUCCESS: Closed smallest profit position");
+        Print("  Symbol: ", symbolToClose);
+        Print("  Profit: $", DoubleToString(smallestProfit, 2));
+        Print("  Ticket: ", ticketToClose);
+        
+        // Update trade direction tracking (if you have this function)
+        UpdateTradeDirection(symbolToClose);
+        
+        // Optional: Add delay to prevent immediate re-entry
+        Sleep(100);
+    }
+    else
+    {
+        Print("FAILED: Could not close position ", ticketToClose);
+        Print("Error: ", trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription());
+        outClosedSymbol = "";
+    }
+    
+    Print("=== CLOSE SMALLEST PROFIT POSITION END ===");
+    
+    return result;
+}
+
+//+------------------------------------------------------------------+
+//| CloseSmallestWinFirst - Complete version                         |
+//| Closes the smallest WINNING position first                       |
+//+------------------------------------------------------------------+
+bool CloseSmallestWinFirst(string &outClosedSymbol, double minProfit = 0.01)
+{
+    double smallestWin = DBL_MAX;  // Start with large positive
+    ulong ticketToClose = 0;
+    string symbolToClose = "";
+    bool foundWin = false;
+    
+    Print("=== CLOSE SMALLEST WIN FIRST (Min: $", minProfit, ") ===");
+    Print("Total positions: ", PositionsTotal());
+    
+    // ============ 1. FIND SMALLEST WINNING POSITION ============
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket <= 0) continue;
+        
+        if(PositionSelectByTicket(ticket))
+        {
+            string symbol = PositionGetString(POSITION_SYMBOL);
+            double profit = PositionGetDouble(POSITION_PROFIT);
+            double volume = PositionGetDouble(POSITION_VOLUME);
+            
+            Print("Checking position ", i, ": ", symbol, 
+                  " | Profit: $", DoubleToString(profit, 2),
+                  " | Volume: ", DoubleToString(volume, 2));
+            
+            // Only consider WINNING positions above minimum
+            if(profit >= minProfit)
+            {
+                foundWin = true;
+                
+                // Find smallest winning position
+                if(profit < smallestWin)
+                {
+                    smallestWin = profit;
+                    ticketToClose = ticket;
+                    symbolToClose = symbol;
+                    
+                    Print("NEW SMALLEST WIN: ", symbol, 
+                          " | Profit: $", DoubleToString(profit, 2));
+                }
+            }
+        }
+    }
+    
+    // ============ 2. FALLBACK TO SMALLEST LOSS IF NO WINS ============
+    if(!foundWin)
+    {
+        Print("No winning positions found (min: $", minProfit, "). Checking losses...");
+        return CloseSmallestLossFirst(outClosedSymbol);
+    }
+    
+    // ============ 3. SAFETY CHECKS ============
+    if(ticketToClose <= 0 || symbolToClose == "")
+    {
+        Print("ERROR: Invalid position selected for closing");
+        outClosedSymbol = "";
+        return false;
+    }
+    
+    // Get final details
+    if(PositionSelectByTicket(ticketToClose))
+    {
+        double finalProfit = PositionGetDouble(POSITION_PROFIT);
+        double finalVolume = PositionGetDouble(POSITION_VOLUME);
+        
+        Print("PRE-CLOSE: ", symbolToClose,
+              " | Ticket: ", ticketToClose,
+              " | Profit: $", DoubleToString(finalProfit, 2),
+              " | Volume: ", DoubleToString(finalVolume, 2));
+    }
+    
+    // ============ 4. CLOSE THE POSITION ============
+    Print("Closing smallest win: ", symbolToClose, " | Ticket: ", ticketToClose);
+    
+    bool result = trade.PositionClose(ticketToClose);
+    
+    if(result)
+    {
+        outClosedSymbol = symbolToClose;
+        
+        Print("SUCCESS: Closed smallest winning position");
+        Print("  Symbol: ", symbolToClose);
+        Print("  Profit: $", DoubleToString(smallestWin, 2));
+        Print("  Ticket: ", ticketToClose);
+        
+        // Update trade direction tracking
+        UpdateTradeDirection(symbolToClose);
+    }
+    else
+    {
+        Print("FAILED: Could not close position ", ticketToClose);
+        Print("Error: ", trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription());
+        outClosedSymbol = "";
+    }
+    
+    return result;
+}
+
+//+------------------------------------------------------------------+
+//| CloseSmallestLossFirst - Complete version                        |
+//| Closes the smallest LOSS first (least negative)                  |
+//+------------------------------------------------------------------+
+bool CloseSmallestLossFirst(string &outClosedSymbol)
+{
+    double smallestLoss = 0;  // Start at 0 (least negative possible)
+    ulong ticketToClose = 0;
+    string symbolToClose = "";
+    bool foundLoss = false;
+    
+    Print("=== CLOSE SMALLEST LOSS FIRST ===");
+    Print("Total positions: ", PositionsTotal());
+    
+    // ============ 1. FIND SMALLEST LOSS ============
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket <= 0) continue;
+        
+        if(PositionSelectByTicket(ticket))
+        {
+            string symbol = PositionGetString(POSITION_SYMBOL);
+            double profit = PositionGetDouble(POSITION_PROFIT);
+            double volume = PositionGetDouble(POSITION_VOLUME);
+            
+            Print("Checking position ", i, ": ", symbol, 
+                  " | Profit: $", DoubleToString(profit, 2),
+                  " | Volume: ", DoubleToString(volume, 2));
+            
+            // Only consider LOSING positions
+            if(profit < 0)
+            {
+                foundLoss = true;
+                
+                // Find least negative loss (closest to zero)
+                // -$1 is SMALLER loss than -$10 (so -1 > -10)
+                if(profit > smallestLoss)
+                {
+                    smallestLoss = profit;
+                    ticketToClose = ticket;
+                    symbolToClose = symbol;
+                    
+                    Print("NEW SMALLEST LOSS: ", symbol, 
+                          " | Loss: $", DoubleToString(profit, 2));
+                }
+            }
+        }
+    }
+    
+    // ============ 2. CHECK IF WE SHOULD CLOSE ============
+    if(!foundLoss)
+    {
+        Print("No losing positions found.");
+        outClosedSymbol = "";
+        return false;
+    }
+    
+    // ============ 3. SAFETY CHECKS ============
+    if(ticketToClose <= 0 || symbolToClose == "")
+    {
+        Print("ERROR: Invalid position selected for closing");
+        outClosedSymbol = "";
+        return false;
+    }
+    
+    // Get final details
+    if(PositionSelectByTicket(ticketToClose))
+    {
+        double finalProfit = PositionGetDouble(POSITION_PROFIT);
+        double finalVolume = PositionGetDouble(POSITION_VOLUME);
+        
+        Print("PRE-CLOSE: ", symbolToClose,
+              " | Ticket: ", ticketToClose,
+              " | Loss: $", DoubleToString(finalProfit, 2),
+              " | Volume: ", DoubleToString(finalVolume, 2));
+    }
+    
+    // ============ 4. CLOSE THE POSITION ============
+    Print("Closing smallest loss: ", symbolToClose, " | Ticket: ", ticketToClose);
+    
+    bool result = trade.PositionClose(ticketToClose);
+    
+    if(result)
+    {
+        outClosedSymbol = symbolToClose;
+        
+        Print("SUCCESS: Closed smallest losing position");
+        Print("  Symbol: ", symbolToClose);
+        Print("  Loss: $", DoubleToString(smallestLoss, 2));
+        Print("  Ticket: ", ticketToClose);
+        
+        // Update trade direction tracking
+        UpdateTradeDirection(symbolToClose);
+    }
+    else
+    {
+        Print("FAILED: Could not close position ", ticketToClose);
+        Print("Error: ", trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription());
+        outClosedSymbol = "";
+    }
+    
+    return result;
+}
+
+//+------------------------------------------------------------------+
+//| Smart Close Position - Decision based on strategy                |
+//| Chooses which position to close based on current market state    |
+//+------------------------------------------------------------------+
+enum ENUM_CLOSE_PRIORITY {
+    CLOSE_SMALLEST_PROFIT,    // Default for folding - minimize impact
+    CLOSE_BIGGEST_LOSS,       // For damage control
+    CLOSE_SMALLEST_LOSS,      // For gradual recovery
+    CLOSE_OLDEST,             // Based on opening time
+    CLOSE_NEWEST              // Based on opening time
+};
+
+bool SmartClosePosition(string &outClosedSymbol, ENUM_CLOSE_PRIORITY priority = CLOSE_SMALLEST_PROFIT)
+{
+    switch(priority)
+    {
+        case CLOSE_SMALLEST_PROFIT:
+            return CloseSmallestProfitPosition(outClosedSymbol);
+        
+        case CLOSE_BIGGEST_LOSS:
+            return CloseBiggestLosingPosition(outClosedSymbol);
+        
+        case CLOSE_SMALLEST_LOSS:
+            return CloseSmallestLossFirst(outClosedSymbol);
+        
+        case CLOSE_OLDEST:
+            return CloseOldestPosition(outClosedSymbol);
+        
+        case CLOSE_NEWEST:
+            return CloseNewestPosition(outClosedSymbol);
+    }
+    
+    outClosedSymbol = "";
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Get Folding Recommendation - Which position to close for folding |
+//+------------------------------------------------------------------+
+ENUM_CLOSE_PRIORITY GetFoldingRecommendation()
+{
+    int totalPositions = PositionsTotal();
+    int winningPositions = 0;
+    int losingPositions = 0;
+    double totalProfit = 0;
+    
+    // Analyze current positions
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket <= 0) continue;
+        
+        if(PositionSelectByTicket(ticket))
+        {
+            double profit = PositionGetDouble(POSITION_PROFIT);
+            totalProfit += profit;
+            
+            if(profit >= 0)
+                winningPositions++;
+            else
+                losingPositions++;
+        }
+    }
+    
+    Print("Folding Analysis: Total=", totalPositions, 
+          " | Wins=", winningPositions, 
+          " | Losses=", losingPositions,
+          " | Total Profit=$", DoubleToString(totalProfit, 2));
+    
+    // Decision logic
+    if(totalProfit >= 0)
+    {
+        // Overall profitable - close smallest win to preserve capital
+        Print("Recommendation: CLOSE_SMALLEST_PROFIT (portfolio is green)");
+        return CLOSE_SMALLEST_PROFIT;
+    }
+    else if(losingPositions)
+    {
+        // Mostly losing - close smallest loss to reduce damage
+        Print("Recommendation: CLOSE_SMALLEST_LOSS (mostly losing positions)");
+        return CLOSE_SMALLEST_LOSS;
+    }
+    else
+    {
+        // Mixed or mostly winning but overall loss - close biggest loss
+        Print("Recommendation: CLOSE_BIGGEST_LOSS (mixed but overall loss)");
+        return CLOSE_BIGGEST_LOSS;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| CloseSmallestPosition - Close position with smallest volume     |
+//+------------------------------------------------------------------+
+bool CloseSmallestPosition(string &outClosedSymbol)
+{
+    double smallestVolume = DBL_MAX;
+    ulong ticketToClose = 0;
+    string symbolToClose = "";
+    
+    // ============ 1. FIND SMALLEST POSITION ============
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket <= 0) continue;
+        
+        if(PositionSelectByTicket(ticket))
+        {
+            double volume = PositionGetDouble(POSITION_VOLUME);
+            
+            if(volume < smallestVolume)
+            {
+                smallestVolume = volume;
+                ticketToClose = ticket;
+                symbolToClose = PositionGetString(POSITION_SYMBOL);
+            }
+        }
+    }
+    
+    // ============ 2. CLOSE THE POSITION ============
+    if(ticketToClose > 0)
+    {
+        bool result = trade.PositionClose(ticketToClose);
+        
+        if(result)
+        {
+            outClosedSymbol = symbolToClose;
+            
+            Print("CLOSED: Smallest position for ", symbolToClose,
+                  " | Volume: ", DoubleToString(smallestVolume, 2),
+                  " | Ticket: ", ticketToClose);
+            
+            // Update trade direction tracking
+            UpdateTradeDirection(symbolToClose);
+        }
+        
+        return result;
+    }
+    
+    outClosedSymbol = "";
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| CloseOldestPosition - Close position opened earliest            |
+//+------------------------------------------------------------------+
+bool CloseOldestPosition(string &outClosedSymbol)
+{
+    datetime oldestTime = D'3000.01.01';  // Far future
+    ulong ticketToClose = 0;
+    string symbolToClose = "";
+    
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket <= 0) continue;
+        
+        if(PositionSelectByTicket(ticket))
+        {
+            datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+            
+            if(openTime < oldestTime)
+            {
+                oldestTime = openTime;
+                ticketToClose = ticket;
+                symbolToClose = PositionGetString(POSITION_SYMBOL);
+            }
+        }
+    }
+    
+    if(ticketToClose > 0)
+    {
+        bool result = trade.PositionClose(ticketToClose);
+        
+        if(result)
+        {
+            outClosedSymbol = symbolToClose;
+            Print("Closed oldest position: ", symbolToClose, 
+                  " | Opened: ", TimeToString(oldestTime));
+            UpdateTradeDirection(symbolToClose);
+        }
+        
+        return result;
+    }
+    
+    outClosedSymbol = "";
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| CloseNewestPosition - Close position opened most recently       |
+//+------------------------------------------------------------------+
+bool CloseNewestPosition(string &outClosedSymbol)
+{
+    datetime newestTime = 0;  // Far past
+    ulong ticketToClose = 0;
+    string symbolToClose = "";
+    
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket <= 0) continue;
+        
+        if(PositionSelectByTicket(ticket))
+        {
+            datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+            
+            if(openTime > newestTime)
+            {
+                newestTime = openTime;
+                ticketToClose = ticket;
+                symbolToClose = PositionGetString(POSITION_SYMBOL);
+            }
+        }
+    }
+    
+    if(ticketToClose > 0)
+    {
+        bool result = trade.PositionClose(ticketToClose);
+        
+        if(result)
+        {
+            outClosedSymbol = symbolToClose;
+            Print("Closed newest position: ", symbolToClose, 
+                  " | Opened: ", TimeToString(newestTime));
+            UpdateTradeDirection(symbolToClose);
+        }
+        
+        return result;
+    }
+    
+    outClosedSymbol = "";
+    return false;
 }
 
 string GetOrderErrorDescription(int errorCode)
