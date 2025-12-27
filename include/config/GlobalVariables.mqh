@@ -27,9 +27,7 @@ bool g_CloseBuyPositions = false;
 bool g_CloseSellPositions = false;
 string g_CloseReason = "";
 double g_ClosePercentage = 0;
-datetime g_LastCloseSignalTime = 0;
-
-DivergenceOverride divergenceOverride;  // Global override state
+datetime g_LastCloseSignalTime = 0;  // Global override state
 
 //+------------------------------------------------------------------+
 //| shared_globals.mqh                                              |
@@ -43,7 +41,7 @@ string activeSymbols[];
 datetime lastTradeCandle[];
 string LastDecision = "";
 string DebugInfo = "";
-double accountBalance = 0;
+// double accountBalance = 0;
 
 // Daily tracking variables
 double dailyStartBalance = 0;

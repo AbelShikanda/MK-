@@ -1,14 +1,4 @@
 #include "enums.mqh"
-
-//------------------ STRATEGY SELECTION --------------------
-input group "=== STRATEGY SELECTION ==="
-enum ENUM_STRATEGY_TYPE
-{
-    STRATEGY_SCALPING,     // Ultra-fast M1/M5 scalping
-    STRATEGY_SWING         // M5/H1 swing trading
-};
-input ENUM_STRATEGY_TYPE StrategyType = STRATEGY_SWING;  // Select strategy
-
 //------------------ PROGRESSIVE ACCOUNT SCALING --------------------
 input group "=== PROGRESSIVE SYMBOL SCALING ==="
 input double BalanceForSecondSymbol  = 500.0;

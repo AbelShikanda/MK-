@@ -8,8 +8,6 @@
 #include "../config/inputs.mqh"
 #include "../config/structures.mqh"
 #include "../config/GlobalVariables.mqh"
-#include "../signals/SignalGenerator.mqh"
-#include "utils.mqh"
 
 
 

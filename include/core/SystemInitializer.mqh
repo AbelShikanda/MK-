@@ -1,596 +1,872 @@
 //+------------------------------------------------------------------+
-//| SystemInitializer.mqh - Core EA Setup                           |
-//| Merged from: init.mqh + HealthMonitor.mqh                       |
+//|                   SystemInitializer.mqh                          |
+//|                  Complete EA Setup & Management                  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024"
 #property link      "yourwebsite.com"
 #property strict
 
-#include "../config/inputs.mqh"
-#include "../config/GlobalVariables.mqh"
-#include "../config/structures.mqh"
-#include "../utils/SymbolUtils.mqh"
-#include "../utils/IndicatorUtils.mqh"
-#include "../utils/TradeUtils.mqh"
-#include "../market/trend/MultiTimeframe.mqh"
-#include "../market/detectors/ReversalDetector.mqh"
+// ============================================================
+// INCLUDES (MODULAR - Add modules as needed)
+// ============================================================
+#include "../utils/ResourceManager.mqh"
 
-// ================================================================
-// SECTION 1: SYSTEM INITIALIZATION (from init.mqh)
-// ================================================================
+#include "../risk/AccountManager.mqh"
+#include "../risk/RiskManager.mqh"
+#include "../execution/PositionManager.mqh"
+#include "../execution/DecisionEngine.mqh"  // <-- This gives us DecisionParams definition
 
-//+------------------------------------------------------------------+
-//| Initialize the entire EA                                        |
-//+------------------------------------------------------------------+
-bool InitializeEA()
+#include "../MTF/MtfDetector.mqh"
+#include "../MarketStructure/OrderBlock.mqh"
+
+#include "../Confidence/MarketStructure.mqh"
+#include "../Confidence/MTF.mqh"
+#include "../execution/ConfidenceEngine.mqh"
+
+// ============================================================
+//               CONFIDENCE ENGINE BRIDGE FUNCTIONS
+// ============================================================
+
+// Global ConfidenceEngine instance
+ConfidenceEngine* g_confidenceEngine = NULL;
+
+// 1. Bridge function to get confidence score WITH SYMBOL
+double GetConfidenceFromEngine(string symbol)
 {
-    Print("========================================");
-    Print("  SAFE METALS EA v4.5 - INITIALIZATION  ");
-    Print("========================================");
-    
-    // Step 0: Check if we're in Strategy Tester
-    bool isTester = MQLInfoInteger(MQL_TESTER);
-    bool isVisual = MQLInfoInteger(MQL_VISUAL_MODE);
-    
-    if(isTester || isVisual)
+    if(g_confidenceEngine != NULL && g_confidenceEngine.IsInitialized()) 
     {
-        Print("Running in Strategy Tester/Visual Mode");
-        Print("Only using current symbol: ", _Symbol);
+        // USE THE SYMBOL PARAMETER!
+        double confidence = g_confidenceEngine.GetConfidenceScore(symbol);  // Changed!
         
-        // In tester, only use the current symbol
-        totalSymbols = 1;
-        ArrayResize(activeSymbols, 1);
-        activeSymbols[0] = _Symbol;
+        if(confidence < 10.0 || confidence > 90.0) // Log only extreme values
+            PrintFormat("Bridge: Confidence for %s = %.1f%%", symbol, confidence);
+        return confidence;
     }
-    else
-    {
-        // Step 1: Get account info
-        accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-        Print("Step 1: Account Balance: $", DoubleToString(accountBalance, 2));
-        
-        // Step 2: Determine symbols to trade (LIVE trading only)
-        string selectedSymbols[];
-        double minScore = 60.0;
-        int symbolCount = DetermineActiveSymbols(selectedSymbols, minScore);
+    PrintFormat("ERROR: ConfidenceEngine not available for %s", symbol);
+    return 50.0; // Default neutral confidence
+}
 
-        // ========== CRITICAL FIX ==========
-        // Copy selected symbols to global arrays
-        if(symbolCount > 0)
+// 2. Bridge function to get market direction WITH SYMBOL
+MARKET_DIRECTION GetMarketDirectionFromEngine(string symbol)
+{
+    if(g_confidenceEngine != NULL && g_confidenceEngine.IsInitialized()) 
+    {
+        // USE THE SYMBOL PARAMETER!
+        CONFIDENCE_SIGNAL signal = g_confidenceEngine.GetSignal(symbol);  // Changed!
+        
+        // Convert CONFIDENCE_SIGNAL to MARKET_DIRECTION
+        if(signal == SIGNAL_STRONG_BUY || signal == SIGNAL_WEAK_BUY) 
         {
-            totalSymbols = symbolCount;
-            ArrayResize(activeSymbols, totalSymbols);
-            
-            for(int i = 0; i < totalSymbols; i++)
-            {
-                activeSymbols[i] = selectedSymbols[i];
-            }
-            
-            Print("Step 2: Selected ", totalSymbols, " symbols");
-            
-            // Log what we selected
-            for(int i = 0; i < totalSymbols; i++)
-            {
-                Print("  ", i+1, ". ", activeSymbols[i]);
-            }
+            return DIRECTION_BULLISH;
         }
-        else
-        // ========== END FIX ==========
-
-        if(totalSymbols == 0)
+        else if(signal == SIGNAL_STRONG_SELL || signal == SIGNAL_WEAK_SELL) 
         {
-            Print("✗ ERROR: No symbols available for trading");
-            return false;
+            return DIRECTION_BEARISH;
         }
-        Print("Step 2: Selected ", totalSymbols, " symbols");
-    }
-    
-    // Step 3: Initialize arrays
-    InitializeAllArrays();
-    InitializeIndicatorArrays();
-    Print("Step 3: Arrays initialized");
-    
-    InitDivergenceTracker();
-    
-    // Step 4: Initialize daily tracking
-    InitializeDailyTracking();
-    Print("Step 4: Daily tracking initialized");
-    
-    // Step 5: Create indicators
-    if(!CreateAllIndicatorsForSymbols())
-    {
-        Print("✗ ERROR: Indicator creation failed");
-        return false;
-    }
-    Print("Step 5: Indicators created");
-    
-    // Step 6: Configure trade settings
-    trade.SetExpertMagicNumber(12345);
-    trade.SetDeviationInPoints(10);
-    // UpdateTradingParameters();
-    Print("Step 6: Trade settings configured");
-    
-    // Step 7: Initialize health monitoring
-    InitializeHealthMonitor();
-    
-    Print("✓ INITIALIZATION COMPLETE");
-    Print("========================================");
-    
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Initialize all dynamic arrays                                   |
-//+------------------------------------------------------------------+
-void InitializeAllArrays()
-{
-    // Signal tracking// Instead, just initialize the values:
-    for(int i = 0; i < 100; i++)
-    {
-        signalHistory[i].symbol = "";
-        signalHistory[i].type = "";
-        signalHistory[i].strength = 0.0;
-        signalHistory[i].timestamp = 0;
-    }
-    
-    // Make sure maxSignalHistory matches the actual array size
-    maxSignalHistory = 100;  // IMPORTANT!
-    
-    // Position tracking
-    ArrayResize(positionTracker, 100);
-    
-    // Trend tracking
-    ArrayResize(trendHealth, 10);
-    ArrayResize(trendMomentum, 10);
-    
-    Print("INIT: All dynamic arrays initialized");
-}
-
-//+------------------------------------------------------------------+
-//| Initialize indicator arrays                                     |
-//+------------------------------------------------------------------+
-void InitializeIndicatorArrays()
-{
-    // M5 arrays
-    ArrayResize(veryFastMA_M5, totalSymbols);
-    ArrayResize(fastMA_M5, totalSymbols);
-    ArrayResize(mediumMA_M5, totalSymbols);
-    ArrayResize(slowMA_M5, totalSymbols);
-    ArrayResize(rsi_M5, totalSymbols);
-    ArrayResize(stoch_M5, totalSymbols);
-    ArrayResize(macd_M5, totalSymbols);
-    
-    // M15 arrays
-    ArrayResize(fastMA_M15, totalSymbols);
-    ArrayResize(mediumMA_M15, totalSymbols);
-    ArrayResize(slowMA_M15, totalSymbols);
-    ArrayResize(rsi_M15, totalSymbols);
-    ArrayResize(stoch_M15, totalSymbols);
-    ArrayResize(macd_M15, totalSymbols);
-    
-    // H1 arrays
-    ArrayResize(fastMA_H1, totalSymbols);
-    ArrayResize(mediumMA_H1, totalSymbols);
-    ArrayResize(slowMA_H1, totalSymbols);
-    ArrayResize(rsi_H1, totalSymbols);
-    ArrayResize(stoch_H1, totalSymbols);
-    ArrayResize(macd_H1, totalSymbols);
-    
-    // Other indicators
-    ArrayResize(longTermMA_H4, totalSymbols);
-    ArrayResize(longTermMA_LT, totalSymbols);
-    ArrayResize(atr_handles, totalSymbols);
-    ArrayResize(lastTradeCandle, totalSymbols);
-    ArrayResize(atr_handles_M5, totalSymbols);
-    ArrayResize(atr_handles_M15, totalSymbols);
-    
-    // Initialize to -1 (invalid handle)
-    InitializeArrayValues();
-    
-    Print("INIT: Indicator arrays initialized for ", totalSymbols, " symbols");
-}
-
-//+------------------------------------------------------------------+
-//| Initialize array values to default                              |
-//+------------------------------------------------------------------+
-void InitializeArrayValues()
-{
-    // Initialize all indicator arrays to -1
-    ArrayInitialize(veryFastMA_M5, -1);
-    ArrayInitialize(fastMA_M5, -1);
-    ArrayInitialize(mediumMA_M5, -1);
-    ArrayInitialize(slowMA_M5, -1);
-    ArrayInitialize(rsi_M5, -1);
-    ArrayInitialize(stoch_M5, -1);
-    ArrayInitialize(macd_M5, -1);
-    
-    ArrayInitialize(fastMA_M15, -1);
-    ArrayInitialize(mediumMA_M15, -1);
-    ArrayInitialize(slowMA_M15, -1);
-    ArrayInitialize(rsi_M15, -1);
-    ArrayInitialize(stoch_M15, -1);
-    ArrayInitialize(macd_M15, -1);
-    
-    ArrayInitialize(fastMA_H1, -1);
-    ArrayInitialize(mediumMA_H1, -1);
-    ArrayInitialize(slowMA_H1, -1);
-    ArrayInitialize(rsi_H1, -1);
-    ArrayInitialize(stoch_H1, -1);
-    ArrayInitialize(macd_H1, -1);
-    
-    ArrayInitialize(longTermMA_H4, -1);
-    ArrayInitialize(longTermMA_LT, -1);
-    ArrayInitialize(atr_handles, -1);
-    ArrayInitialize(lastTradeCandle, 0);
-    
-    ArrayInitialize(atr_handles_M5, -1);
-    ArrayInitialize(atr_handles_M15, -1);
-}
-
-//+------------------------------------------------------------------+
-//| Create M5 indicators for a symbol                               |
-//+------------------------------------------------------------------+
-bool CreateM5Indicators(string symbol, int index)
-{
-    veryFastMA_M5[index] = iMA(symbol, PERIOD_M5, VeryFastMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-    fastMA_M5[index] = iMA(symbol, PERIOD_M5, FastMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-    mediumMA_M5[index] = iMA(symbol, PERIOD_M5, MediumMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-    slowMA_M5[index] = iMA(symbol, PERIOD_M5, SlowMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-    rsi_M5[index] = iRSI(symbol, PERIOD_M5, RSI_Period, PRICE_CLOSE);
-    stoch_M5[index] = iStochastic(symbol, PERIOD_M5, Stoch_K_Period, Stoch_D_Period, Stoch_Slowing, MODE_SMA, STO_LOWHIGH);
-    macd_M5[index] = iMACD(symbol, PERIOD_M5, MACD_Fast, MACD_Slow, MACD_Signal, PRICE_CLOSE);
-    
-    return (veryFastMA_M5[index] != -1 && fastMA_M5[index] != -1);
-}
-
-//+------------------------------------------------------------------+
-//| Create M15 indicators for a symbol                              |
-//+------------------------------------------------------------------+
-bool CreateM15Indicators(string symbol, int index)
-{
-    fastMA_M15[index] = iMA(symbol, PERIOD_M15, FastMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-    mediumMA_M15[index] = iMA(symbol, PERIOD_M15, MediumMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-    slowMA_M15[index] = iMA(symbol, PERIOD_M15, SlowMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-    rsi_M15[index] = iRSI(symbol, PERIOD_M15, RSI_Period, PRICE_CLOSE);
-    stoch_M15[index] = iStochastic(symbol, PERIOD_M15, Stoch_K_Period, Stoch_D_Period, Stoch_Slowing, MODE_SMA, STO_LOWHIGH);
-    macd_M15[index] = iMACD(symbol, PERIOD_M15, MACD_Fast, MACD_Slow, MACD_Signal, PRICE_CLOSE);
-    
-    return (fastMA_M15[index] != -1 && mediumMA_M15[index] != -1);
-}
-
-//+------------------------------------------------------------------+
-//| Create H1 indicators for a symbol                               |
-//+------------------------------------------------------------------+
-bool CreateH1Indicators(string symbol, int index)
-{
-    fastMA_H1[index] = iMA(symbol, PERIOD_H1, FastMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-    mediumMA_H1[index] = iMA(symbol, PERIOD_H1, MediumMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-    slowMA_H1[index] = iMA(symbol, PERIOD_H1, SlowMA_Period, 0, MODE_EMA, PRICE_CLOSE);
-    rsi_H1[index] = iRSI(symbol, PERIOD_H1, RSI_Period, PRICE_CLOSE);
-    stoch_H1[index] = iStochastic(symbol, PERIOD_H1, Stoch_K_Period, Stoch_D_Period, Stoch_Slowing, MODE_SMA, STO_LOWHIGH);
-    macd_H1[index] = iMACD(symbol, PERIOD_H1, MACD_Fast, MACD_Slow, MACD_Signal, PRICE_CLOSE);
-    
-    return (fastMA_H1[index] != -1 && mediumMA_H1[index] != -1);
-}
-
-//+------------------------------------------------------------------+
-//| Create other indicators for a symbol                            |
-//+------------------------------------------------------------------+
-bool CreateOtherIndicators(string symbol, int index)
-{
-    longTermMA_H4[index] = iMA(symbol, PERIOD_H4, LongTermMA_Period, 0, MODE_SMA, PRICE_CLOSE);
-    longTermMA_LT[index] = iMA(symbol, PERIOD_H1, LongTermMA_Period, 0, MODE_SMA, PRICE_CLOSE);
-    atr_handles_M5[index] = iATR(symbol, PERIOD_M5, ATR_Period);
-    atr_handles_M15[index] = iATR(symbol, PERIOD_M15, ATR_Period);
-    lastTradeCandle[index] = 0;
-    
-    // Check all handles were created
-    if(atr_handles_M5[index] == INVALID_HANDLE || atr_handles_M15[index] == INVALID_HANDLE)
-    {
-        Print("ERROR: Failed to create ATR handles for ", symbol);
-        return false;
-    }
-    
-    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Create all indicators for all symbols                           |
-//+------------------------------------------------------------------+
-bool CreateAllIndicatorsForSymbols()
-{
-    bool allSuccess = true;
-    
-    for(int i = 0; i < totalSymbols; i++)
-    {
-        string symbol = activeSymbols[i];
-        bool symbolSuccess = true;
-        
-        symbolSuccess = symbolSuccess && CreateM5Indicators(symbol, i);
-        symbolSuccess = symbolSuccess && CreateM15Indicators(symbol, i);
-        symbolSuccess = symbolSuccess && CreateH1Indicators(symbol, i);
-        symbolSuccess = symbolSuccess && CreateOtherIndicators(symbol, i);
-        
-        if(symbolSuccess)
-            Print("INIT: Indicators created for ", symbol);
-        else
+        else if(signal == SIGNAL_NEUTRAL) 
         {
-            Print("INIT_ERROR: Failed to create indicators for ", symbol);
-            allSuccess = false;
+            return DIRECTION_RANGING;
+        }
+        else 
+        {
+            PrintFormat("WARN: %s direction = UNCLEAR (signal: %d)", symbol, signal);
+            return DIRECTION_UNCLEAR;
         }
     }
-    
-    return allSuccess;
+    PrintFormat("ERROR: ConfidenceEngine not available for %s", symbol);
+    return DIRECTION_UNCLEAR;
 }
 
-//+------------------------------------------------------------------+
-//| SECTION 2: DAILY TRACKING                                       |
-//+------------------------------------------------------------------+
-
-//+------------------------------------------------------------------+
-//| Initialize daily tracking system                                |
-//+------------------------------------------------------------------+
-void InitializeDailyTracking()
+// 3. Bridge function to check if market is ranging WITH SYMBOL
+bool IsMarketRangingFromEngine(string symbol)
 {
-    // Reset to start of day
-    MqlDateTime today;
-    TimeToStruct(TimeCurrent(), today);
-    today.hour = 0;
-    today.min = 0;
-    today.sec = 0;
-    dailyResetTime = StructToTime(today);
-    
-    // Reset daily values
-    dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-    dailyProfitCash = 0;
-    dailyProfitPips = 0;
-    dailyDrawdownCash = 0;
-    dailyTradesCount = 0;
-    dailyLimitReached = false;
-    
-    Print("INIT: Daily tracking initialized");
-}
-
-//+------------------------------------------------------------------+
-//| Update daily P/L tracking                                       |
-//+------------------------------------------------------------------+
-void UpdateDailyTracking()
-{
-    datetime now = TimeCurrent();
-    if(now >= dailyResetTime + 86400)
+    if(g_confidenceEngine != NULL && g_confidenceEngine.IsInitialized()) 
     {
-        InitializeDailyTracking();
+        CONFIDENCE_SIGNAL signal = g_confidenceEngine.GetSignal(symbol);
+        bool isRanging = (signal == SIGNAL_NEUTRAL);
+        return isRanging;
     }
-    
-    double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-    
-    dailyProfitCash = currentBalance - dailyStartBalance;
-    dailyDrawdownCash = MathMax(0, dailyStartBalance - currentEquity);
-    
-    if(EnableDailyLimits)
-    {
-        if(dailyProfitCash >= DailyProfitLimitCash)
-        {
-            dailyLimitReached = true;
-            Print("DAILY_LIMIT: Daily profit limit reached: $", DoubleToString(dailyProfitCash, 2), 
-                  " >= $", DoubleToString(DailyProfitLimitCash, 2));
-        }
-        
-        if(dailyDrawdownCash >= DailyDrawdownLimitCash)
-        {
-            dailyLimitReached = true;
-            Print("DAILY_LIMIT: Daily drawdown limit reached: $", DoubleToString(dailyDrawdownCash, 2), 
-                  " >= $", DoubleToString(DailyDrawdownLimitCash, 2));
-        }
-    }
-}
-
-//+------------------------------------------------------------------+
-//| SECTION 3: CLEANUP FUNCTIONS                                    |
-//+------------------------------------------------------------------+
-
-//+------------------------------------------------------------------+
-//| Cleanup all resources on shutdown                               |
-//+------------------------------------------------------------------+
-void CleanupEA()
-{
-    Print("CLEANUP: Releasing all resources...");
-    
-    // Release all indicator handles
-    for(int i = 0; i < totalSymbols; i++)
-    {
-        if(veryFastMA_M5[i] != -1) { IndicatorRelease(veryFastMA_M5[i]); veryFastMA_M5[i] = -1; }
-        if(fastMA_M5[i] != -1) { IndicatorRelease(fastMA_M5[i]); fastMA_M5[i] = -1; }
-        if(mediumMA_M5[i] != -1) { IndicatorRelease(mediumMA_M5[i]); mediumMA_M5[i] = -1; }
-        if(slowMA_M5[i] != -1) { IndicatorRelease(slowMA_M5[i]); slowMA_M5[i] = -1; }
-        if(rsi_M5[i] != -1) { IndicatorRelease(rsi_M5[i]); rsi_M5[i] = -1; }
-        if(stoch_M5[i] != -1) { IndicatorRelease(stoch_M5[i]); stoch_M5[i] = -1; }
-        if(macd_M5[i] != -1) { IndicatorRelease(macd_M5[i]); macd_M5[i] = -1; }
-        
-        if(fastMA_M15[i] != -1) { IndicatorRelease(fastMA_M15[i]); fastMA_M15[i] = -1; }
-        if(mediumMA_M15[i] != -1) { IndicatorRelease(mediumMA_M15[i]); mediumMA_M15[i] = -1; }
-        if(slowMA_M15[i] != -1) { IndicatorRelease(slowMA_M15[i]); slowMA_M15[i] = -1; }
-        if(rsi_M15[i] != -1) { IndicatorRelease(rsi_M15[i]); rsi_M15[i] = -1; }
-        if(stoch_M15[i] != -1) { IndicatorRelease(stoch_M15[i]); stoch_M15[i] = -1; }
-        if(macd_M15[i] != -1) { IndicatorRelease(macd_M15[i]); macd_M15[i] = -1; }
-        
-        if(fastMA_H1[i] != -1) { IndicatorRelease(fastMA_H1[i]); fastMA_H1[i] = -1; }
-        if(mediumMA_H1[i] != -1) { IndicatorRelease(mediumMA_H1[i]); mediumMA_H1[i] = -1; }
-        if(slowMA_H1[i] != -1) { IndicatorRelease(slowMA_H1[i]); slowMA_H1[i] = -1; }
-        if(rsi_H1[i] != -1) { IndicatorRelease(rsi_H1[i]); rsi_H1[i] = -1; }
-        if(stoch_H1[i] != -1) { IndicatorRelease(stoch_H1[i]); stoch_H1[i] = -1; }
-        if(macd_H1[i] != -1) { IndicatorRelease(macd_H1[i]); macd_H1[i] = -1; }
-        
-        if(longTermMA_H4[i] != -1) { IndicatorRelease(longTermMA_H4[i]); longTermMA_H4[i] = -1; }
-        if(longTermMA_LT[i] != -1) { IndicatorRelease(longTermMA_LT[i]); longTermMA_LT[i] = -1; }
-        if(atr_handles[i] != -1) { IndicatorRelease(atr_handles[i]); atr_handles[i] = -1; }
-        
-        if(atr_handles_M5[i] != -1) { IndicatorRelease(atr_handles_M5[i]); atr_handles_M5[i] = -1; }
-        if(atr_handles_M15[i] != -1) { IndicatorRelease(atr_handles_M15[i]); atr_handles_M15[i] = -1; }
-    }
-    
-    Print("CLEANUP: All resources released");
-}
-
-//+------------------------------------------------------------------+
-//| Check all indicator handles                                     |
-//+------------------------------------------------------------------+
-void CheckAllIndicatorHandles()
-{
-    Print("=== CHECKING ALL INDICATOR HANDLES ===");
-    
-    for(int i = 0; i < totalSymbols; i++)
-    {
-        string symbol = activeSymbols[i];
-        Print("Symbol: ", symbol);
-        Print("  M5 ATR Handle: ", atr_handles_M5[i], " (", 
-              atr_handles_M5[i] == INVALID_HANDLE ? "INVALID" : "OK", ")");
-        Print("  M15 ATR Handle: ", atr_handles_M15[i], " (", 
-              atr_handles_M15[i] == INVALID_HANDLE ? "INVALID" : "OK", ")");
-        
-        // Test copy from each handle
-        double testValue[1];
-        int copiedM5 = CopyBuffer(atr_handles_M5[i], 0, 0, 1, testValue);
-        Print("  M5 Copy result: ", copiedM5, " Value: ", testValue[0]);
-        
-        int copiedM15 = CopyBuffer(atr_handles_M15[i], 0, 0, 1, testValue);
-        Print("  M15 Copy result: ", copiedM15, " Value: ", testValue[0]);
-    }
-    
-    Print("=== END HANDLE CHECK ===");
-}
-
-// ================================================================
-// SECTION 4: HEALTH MONITORING (from HealthMonitor.mqh)
-// ================================================================
-
-//+------------------------------------------------------------------+
-//| Log Error Helper Function                                       |
-//+------------------------------------------------------------------+
-void LogError(string context, string symbol)
-{
-    Print("HealthMonitor Error: ", context, " failed for ", symbol, 
-          ", error: ", GetLastError());
-}
-
-//+------------------------------------------------------------------+
-//| Monitor ATR Handles - Prevents timeout/stale handles           |
-//+------------------------------------------------------------------+
-void MonitorATRHandles()
-{
-    static int debugCounter = 0;
-    if(debugCounter++ % 100 == 0)
-    {
-        for(int i = 0; i < totalSymbols; i++)
-        {
-            string symbol = activeSymbols[i];
-            int pos = ArrayPosition(symbol);
-            if(pos >= 0)
-            {
-                // Always check M5 (both strategies)
-                if(atr_handles_M5[pos] != INVALID_HANDLE)
-                {
-                    double atrVal[1];
-                    int copied = CopyBuffer(atr_handles_M5[pos], 0, 0, 1, atrVal);
-                    if(copied < 0) LogError("M5 ATR", symbol);
-                }
-                
-                // Also check M1 if it exists (scalping)
-                // if(atr_handles_M1[pos] != INVALID_HANDLE)
-                // {
-                //     double atrValM1[1];
-                //     int copiedM1 = CopyBuffer(atr_handles_M1[pos], 0, 0, 1, atrValM1);
-                //     if(copiedM1 < 0) LogError("M1 ATR", symbol);
-                // }
-            }
-        }
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Monitor Account Balance - Updates trading parameters on change  |
-//+------------------------------------------------------------------+
-void MonitorAccountBalance()
-{
-    static int tickCount = 0;
-    if(tickCount++ % 50 == 0)  // Check more frequently
-    {
-        double newBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-        if(newBalance != accountBalance)
-        {
-            accountBalance = newBalance;
-            // UpdateTradingParameters();
-            
-            // Re-evaluate symbols when balance changes
-            // DetermineActiveSymbols();
-            
-            // Optional: Log balance change
-            // Print("Balance Monitor: Balance changed to $", accountBalance, 
-            //       ", updating trading parameters.");
-        }
-    }
-}
-
-//+------------------------------------------------------------------+
-//| Perform All Health Checks - Combined monitoring function        |
-//+------------------------------------------------------------------+
-void PerformHealthChecks()
-{
-    MonitorATRHandles();
-    MonitorAccountBalance();
-}
-
-//+------------------------------------------------------------------+
-//| Initialize Health Monitoring                                    |
-//+------------------------------------------------------------------+
-void InitializeHealthMonitor()
-{
-    // Print("Health Monitor: Initializing system health monitoring...");
-    
-    // Perform initial checks
-    MonitorATRHandles();
-    
-    // Set initial balance
-    accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-    
-    // Print("Health Monitor: Initial balance set to $", accountBalance);
-}
-
-//+------------------------------------------------------------------+
-//| Check Individual Symbol ATR Handle                              |
-//+------------------------------------------------------------------+
-bool CheckSymbolATRHandle(string symbol)
-{
-    int pos = ArrayPosition(symbol);
-    if(pos >= 0 && atr_handles_M5[pos] != INVALID_HANDLE)
-    {
-        double atrVal[1];
-        int copied = CopyBuffer(atr_handles_M5[pos], 0, 0, 1, atrVal);
-        return (copied >= 0);
-    }
+    PrintFormat("ERROR: ConfidenceEngine not available for %s", symbol);
     return false;
 }
 
-//+------------------------------------------------------------------+
-//| Get Health Status Report                                        |
-//+------------------------------------------------------------------+
-string GetHealthStatusReport()
+// ============================================================
+//               SYSTEM INITIALIZER
+// ============================================================
+class SystemInitializer
 {
-    string report = "=== SYSTEM HEALTH REPORT ===\n";
+private:
+    // Components in dependency order
+    ResourceManager* m_logger;
+
+    AccountManager* m_accountMgr;
+    RiskManager* m_riskMgr;
+    PositionManager* m_posMgr;
+    DecisionEngine* m_decisionEngine;
     
-    // Check ATR handles
-    report += "ATR Handles Status:\n";
-    for(int i = 0; i < totalSymbols; i++)
+    MTFScorer* m_mtfScorer;
+
+    COrderBlock* m_orderBlock;
+    
+    MTFEngine* m_mtfEngine;
+    MarketStructureEngine* m_marketStructure;
+    
+    ConfidenceEngine* m_confidenceEngine;
+    
+    bool m_initialized;
+    string m_errorMessage;
+    
+    // Logging control
+    static datetime s_lastDebugTime;
+    static int s_tickCounter;
+    
+    // ============================================================
+    //               DEBUG METHODS
+    // ============================================================
+    void DebugEngineStatus()
     {
-        string symbol = activeSymbols[i];
-        bool atrOk = CheckSymbolATRHandle(symbol);
-        report += StringFormat("   %s: %s\n", symbol, (atrOk ? "OK" : "FAILED"));
+        static datetime lastDebugTime = 0;
+        datetime currentTime = TimeCurrent();
+        
+        // Limit debug logging to once per minute
+        if(currentTime - lastDebugTime < 60) 
+            return;
+        
+        lastDebugTime = currentTime;
+        
+        if(!m_initialized) 
+        {
+            Print("DEBUG: System not initialized");
+            return;
+        }
+        
+        // 1. Check ConfidenceEngine
+        if(m_confidenceEngine != NULL) 
+        {
+            if(m_confidenceEngine.IsInitialized()) 
+            {
+                double conf = m_confidenceEngine.GetTotalConfidence();
+                PrintFormat("Status: Confidence=%.1f, Session=%s", 
+                          conf, 
+                          m_confidenceEngine.IsTradingSessionActive() ? "ACTIVE" : "INACTIVE");
+            }
+        } 
+        
+        // 2. Check DecisionEngine
+        if(m_decisionEngine != NULL) 
+        {
+            PrintFormat("DecisionEngine: %d symbols", m_decisionEngine.GetSymbolCount());
+        }
     }
     
-    // Account status
-    report += "\nAccount Status:\n";
-    report += StringFormat("   Balance: $%.2f\n", accountBalance);
-    report += StringFormat("   Equity: $%.2f\n", AccountInfoDouble(ACCOUNT_EQUITY));
+    // Add this emergency fix method
+    bool EmergencyAddSymbolToDecisionEngine(string symbol)
+    {
+        if(m_decisionEngine == NULL) 
+        {
+            Print("ERROR: DecisionEngine is NULL!");
+            return false;
+        }
+        
+        Print("EMERGENCY: Adding symbol ", symbol, " to DecisionEngine...");
+        
+        // Use the global DecisionParams from DecisionEngine.mqh
+        DecisionParams params;
+        params.buyConfidenceThreshold = 25.0;
+        params.sellConfidenceThreshold = 25.0;
+        params.addPositionThreshold = 30.0;
+        params.closePositionThreshold = 10.0;
+        params.closeAllThreshold = 5.0;
+        params.cooldownMinutes = 5;
+        params.maxPositionsPerSymbol = 3;
+        params.riskPercent = 1.0;
+        
+        if(m_decisionEngine.AddSymbol(symbol, params)) 
+        {
+            Print("SUCCESS: Added ", symbol, " to DecisionEngine");
+            
+            // Connect bridge functions
+            if(g_confidenceEngine != NULL) 
+            {
+                m_decisionEngine.SetConfidenceFunction(GetConfidenceFromEngine);
+                m_decisionEngine.SetMarketDirectionFunction(GetMarketDirectionFromEngine);
+                m_decisionEngine.SetRangingFunction(IsMarketRangingFromEngine);
+            }
+            
+            return true;
+        } 
+        
+        Print("ERROR: Could not add symbol");
+        return false;
+    }
     
-    return report;
-}
+    // ============================================================
+    //               PRIMARY DEPENDANCY
+    // ============================================================
+    bool Initialize_Primary_Dep()
+    {
+        // Phase 1: ResourceManager (no dependencies)
+        m_logger = new ResourceManager();
+        if(m_logger == NULL)
+        {
+            m_errorMessage = "Failed to create ResourceManager";
+            return false;
+        }
+        
+        if(!m_logger.Initialize("SystemLog.csv", true, true, true))
+        {
+            m_errorMessage = "Failed to initialize ResourceManager";
+            delete m_logger;
+            m_logger = NULL;
+            return false;
+        }
+        
+        return true;
+    }
+    
+    // ============================================================
+    //               ACCOUNTS INITIALIZATION
+    // ============================================================
+    bool Initialize_Acocunts()
+    {
+        // Phase 2: AccountManager (needs ResourceManager)
+        m_accountMgr = new AccountManager();
+        if(m_accountMgr == NULL)
+        {
+            m_errorMessage = "Failed to create AccountManager";
+            return false;
+        }
+        
+        if(!m_accountMgr.Initialize(m_logger))
+        {
+            m_errorMessage = "Failed to initialize AccountManager";
+            delete m_accountMgr;
+            m_accountMgr = NULL;
+            return false;
+        }
+        
+        return true;
+    }
+    
+    // ============================================================
+    //               RISK INITIALIZATION
+    // ============================================================
+    bool Initialize_Risk(double maxDailyLoss, double maxPositionRisk, 
+                         double maxExposure, int maxPositions)
+    {
+        // Phase 3: RiskManager (needs AccountManager + ResourceManager)
+        m_riskMgr = new RiskManager();
+        if(m_riskMgr == NULL)
+        {
+            m_errorMessage = "Failed to create RiskManager";
+            return false;
+        }
+        
+        // CRITICAL: Verify AccountManager is initialized
+        if(m_accountMgr == NULL) 
+        {
+            m_errorMessage = "AccountManager not initialized before RiskManager";
+            delete m_riskMgr;
+            m_riskMgr = NULL;
+            return false;
+        }
+        
+        // Verify logger
+        if(m_logger == NULL) 
+        {
+            m_errorMessage = "Logger not initialized before RiskManager";
+            delete m_riskMgr;
+            m_riskMgr = NULL;
+            return false;
+        }
+        
+        if(!m_riskMgr.Initialize(m_logger, m_accountMgr))
+        {
+            m_errorMessage = "Failed to initialize RiskManager";
+            delete m_riskMgr;
+            m_riskMgr = NULL;
+            return false;
+        }
+        
+        // Set risk parameters
+        m_riskMgr.SetMaxDailyLossPercent(maxDailyLoss);
+        m_riskMgr.SetMaxPositionRiskPercent(maxPositionRisk);
+        m_riskMgr.SetMaxPortfolioExposure(maxExposure);
+        m_riskMgr.SetMaxConcurrentPositions(maxPositions);
+        
+        return true;
+    }
+    
+    // ============================================================
+    //               DATA ANALYSIS COMPONENTS
+    // ============================================================
+    bool Initialize_MTF_Components(string m_symbol)
+    {
+        // Phase 1: MTFEngine (needs ResourceManager)
+        m_mtfScorer = new MTFScorer();
+        if(m_mtfScorer == NULL)
+        {
+            m_errorMessage = "Failed to create MTFEngine";
+            return false;
+        }
+        
+        if(!m_mtfScorer.Initialize(m_logger, m_symbol))
+        {
+            m_errorMessage = "Failed to initialize MTFEngine";
+            delete m_mtfScorer;
+            m_mtfScorer = NULL;
+            return false;
+        }
+
+        return true;
+    }
+    
+    bool Initialize_MarketStructure_Components(string m_symbol)
+    {
+        // Phase 1: OrderBlock (needs ResourceManager)
+        m_orderBlock = new COrderBlock();
+        if(m_orderBlock == NULL)
+        {
+            m_errorMessage = "Failed to create OrderBlock";
+            return false;
+        }
+        
+        if(!m_orderBlock.Initialize(m_logger, m_symbol))
+        {
+            m_errorMessage = "Failed to initialize OrderBlock";
+            delete m_orderBlock;
+            m_orderBlock = NULL;
+            return false;
+        }
+
+        return true;
+    }
+    
+    // ============================================================
+    //               CONFIDENCE COMPONENTS
+    // ============================================================
+    bool Initialize_MTF(string m_symbol)
+    {
+        // Phase 1: MTFEngine (needs ResourceManager)
+        m_mtfEngine = new MTFEngine();
+        if(m_mtfEngine == NULL)
+        {
+            m_errorMessage = "Failed to create MTFEngine";
+            return false;
+        }
+        
+        if(!m_mtfEngine.Initialize(m_logger, m_mtfScorer, m_symbol))
+        {
+            m_errorMessage = "Failed to initialize MTFEngine";
+            delete m_mtfEngine;
+            m_mtfEngine = NULL;
+            return false;
+        }
+
+        return true;
+    }
+    
+    bool Initialize_MarketStructure()
+    {
+        // Phase 1: MarketStructure (needs ResourceManager)
+        m_marketStructure = new MarketStructureEngine();
+        if(m_marketStructure == NULL)
+        {
+            m_errorMessage = "Failed to create MarketStructure";
+            return false;
+        }
+        
+        if(!m_marketStructure.Initialize(m_logger, m_orderBlock))
+        {
+            m_errorMessage = "Failed to initialize MarketStructure";
+            delete m_marketStructure;
+            m_marketStructure = NULL;
+            return false;
+        }
+
+        return true;
+    }
+
+    // ============================================================
+    //               EXECUTION COMPONENTS
+    // ============================================================
+    
+    bool Initialize_PositionManager(string expertName, int baseMagic, int slippage)
+    {
+        // Phase 4: PositionManager (needs RiskManager + ResourceManager)
+        m_posMgr = new PositionManager();
+        if(m_posMgr == NULL)
+        {
+            m_errorMessage = "Failed to create PositionManager";
+            return false;
+        }
+        
+        if(!m_posMgr.Initialize(expertName + "_Positions", baseMagic, 
+                                 slippage, m_logger, m_riskMgr))
+        {
+            m_errorMessage = "Failed to initialize PositionManager";
+            
+            // Try alternative initialization
+            delete m_posMgr;
+            m_posMgr = new PositionManager();
+            
+            // Try without RiskManager first
+            if(!m_posMgr.Initialize(
+                expertName + "_Positions", 
+                baseMagic, 
+                slippage, 
+                m_logger, 
+                NULL))  // NULL RiskManager
+            {
+                delete m_posMgr;
+                m_posMgr = NULL;
+                return false;
+            } 
+        } 
+        
+        return true;
+    }
+    
+    bool Initialize_DecisionEngine(string expertName, int baseMagic, int slippage)
+    {
+        // Phase 5: DecisionEngine (needs PositionManager + ResourceManager)
+        m_decisionEngine = new DecisionEngine();
+        if(m_decisionEngine == NULL)
+        {
+            m_errorMessage = "Failed to create DecisionEngine";
+            return false;
+        }
+        
+        if(!m_decisionEngine.Initialize(m_logger, m_posMgr, m_riskMgr, 
+                                         expertName + "_Decisions", baseMagic, slippage))
+        {
+            m_errorMessage = "Failed to initialize DecisionEngine";
+            
+            // Try alternative initialization without PositionManager
+            delete m_decisionEngine;
+            m_decisionEngine = new DecisionEngine();
+            
+            if(!m_decisionEngine.Initialize(m_logger, NULL, m_riskMgr,
+                                             expertName + "_Decisions", baseMagic, slippage))
+            {
+                delete m_decisionEngine;
+                m_decisionEngine = NULL;
+                return false;
+            } 
+        } 
+        
+        return true;
+    }
+    
+    bool Initialize_Confidence(string m_symbol)
+    {
+        // Phase 5: ConfidenceEngine (needs MTFEngine + ResourceManager)
+        m_confidenceEngine = new ConfidenceEngine();
+        if(m_confidenceEngine == NULL)
+        {
+            m_errorMessage = "Failed to create ConfidenceEngine";
+            return false;
+        }
+        
+        if(!m_confidenceEngine.Initialize(m_logger, 
+                                            m_marketStructure,
+                                            m_mtfEngine, 
+                                            m_riskMgr,
+                                            m_symbol))
+        {
+            m_errorMessage = "Failed to initialize ConfidenceEngine";
+            delete m_confidenceEngine;
+            m_confidenceEngine = NULL;
+            return false;
+        }
+        
+        return true;
+    }
+    
+    // ============================================================
+    //               CONNECT CONFIDENCE TO DECISION ENGINE
+    // ============================================================
+    bool ConnectEngines(string symbol, double buyThreshold = 25.0, 
+                       double sellThreshold = 25.0, double riskPercent = 1.0)
+    {
+        if(m_confidenceEngine == NULL || m_decisionEngine == NULL) 
+        {
+            m_errorMessage = "Engines not initialized for connection";
+            return false;
+        }
+        
+        // Set the global pointer so bridge functions can access it
+        g_confidenceEngine = m_confidenceEngine;
+        
+        // Set up DecisionParams for the symbol - using global DecisionParams
+        DecisionParams params;
+        params.buyConfidenceThreshold = buyThreshold;
+        params.sellConfidenceThreshold = sellThreshold;
+        params.addPositionThreshold = buyThreshold + 10.0;
+        params.closePositionThreshold = buyThreshold - 10.0;
+        params.closeAllThreshold = buyThreshold - 15.0;
+        params.cooldownMinutes = 5;
+        params.maxPositionsPerSymbol = 3;
+        params.riskPercent = riskPercent;
+        
+        // Add symbol to DecisionEngine
+        if(!m_decisionEngine.AddSymbol(symbol, params)) 
+        {
+            m_errorMessage = "Failed to add symbol to DecisionEngine";
+            
+            // Try alternative method
+            if(!m_decisionEngine.QuickInitialize(symbol, buyThreshold, sellThreshold, riskPercent)) 
+            {
+                return false;
+            } 
+        } 
+        
+        // ============ ADD THIS ONE LINE ============
+        m_decisionEngine.SetDebugMode(true);
+        
+        // Connect ConfidenceEngine to DecisionEngine using bridge functions
+        m_decisionEngine.SetConfidenceFunction(GetConfidenceFromEngine);
+        m_decisionEngine.SetMarketDirectionFunction(GetMarketDirectionFromEngine);
+        m_decisionEngine.SetRangingFunction(IsMarketRangingFromEngine);
+        
+        // Log the connection
+        if(m_logger != NULL) 
+        {
+            m_logger.KeepNotes(symbol, AUTHORIZE, "SystemInitializer", 
+                StringFormat("Engines connected: Confidence → Decision for %s (Thresholds: Buy=%.1f%%, Sell=%.1f%%)", 
+                           symbol, buyThreshold, sellThreshold));
+        }
+        
+        PrintFormat("SUCCESS: Engines connected for %s (Buy:%.1f%%, Sell:%.1f%%, Risk:%.1f%%)", 
+                   symbol, buyThreshold, sellThreshold, riskPercent);
+        
+        return true;
+    }
+    
+public:
+    SystemInitializer() : 
+        m_logger(NULL),
+        m_accountMgr(NULL),
+        m_riskMgr(NULL),
+        m_posMgr(NULL),
+        m_decisionEngine(NULL),
+        m_mtfScorer(NULL),
+        m_orderBlock(NULL),
+        m_mtfEngine(NULL),
+        m_marketStructure(NULL),
+        m_confidenceEngine(NULL),
+        m_initialized(false),
+        m_errorMessage("")
+    {
+    }
+    
+    ~SystemInitializer()
+    {
+        CleanupAll();
+    }
+    
+    // Main initialization method
+    bool InitializeAll(
+        string expertName = "TradingSystem",
+        int baseMagic = 12345,
+        int slippage = 5,
+        double maxDailyLoss = 5.0,
+        double maxPositionRisk = 2.0,
+        double maxExposure = 30.0,
+        int maxPositions = 5,
+        string m_symbol = "",
+        double confidenceBuyThreshold = 25.0,
+        double confidenceSellThreshold = 25.0,
+        double riskPercent = 1.0
+    )
+    {
+        if(m_initialized) return true;
+        
+        if(m_logger != NULL)
+        {
+            m_logger.KeepNotes("SYSTEM", OBSERVE, "Initializer", 
+                "Starting system initialization...");
+        }
+        
+        Print("========================================");
+        Print("SYSTEM INITIALIZATION STARTED");
+        Print("========================================");
+        
+        // =============== PHASE 1: CORE RESOURCES ===============
+        if(!Initialize_Primary_Dep()) {
+            Print("ERROR: ResourceManager initialization failed");
+            return false;
+        }
+        
+        // =============== PHASE 2: ACCOUNT & RISK ===============
+        if(!Initialize_Acocunts()) {
+            Print("ERROR: AccountManager initialization failed");
+            return false;
+        }
+        
+        if(!Initialize_Risk(maxDailyLoss, maxPositionRisk, maxExposure, maxPositions)) {
+            Print("ERROR: RiskManager initialization failed");
+            return false;
+        }
+        
+        // =============== PHASE 3: EXECUTION COMPONENTS ===============
+        if(!Initialize_PositionManager(expertName, baseMagic, slippage)) {
+            Print("ERROR: PositionManager initialization failed");
+            return false;
+        }
+        
+        if(!Initialize_DecisionEngine(expertName, baseMagic, slippage)) {
+            Print("ERROR: DecisionEngine initialization failed");
+            return false;
+        }
+        
+        // =============== PHASE 4: DATA ANALYSIS ===============
+        if(!Initialize_MTF_Components(m_symbol)) {
+            Print("ERROR: MTF components initialization failed");
+            return false;
+        }
+        
+        if(!Initialize_MarketStructure_Components(m_symbol)) {
+            Print("ERROR: Market Structure components initialization failed");
+            return false;
+        }
+        
+        // =============== PHASE 5: CONFIDENCE ENGINES ===============
+        if(!Initialize_MTF(m_symbol)) {
+            Print("ERROR: MTFEngine initialization failed");
+            return false;
+        }
+        
+        if(!Initialize_MarketStructure()) {
+            Print("ERROR: MarketStructureEngine initialization failed");
+            return false;
+        }
+        
+        if(!Initialize_Confidence(m_symbol)) {
+            Print("ERROR: ConfidenceEngine initialization failed");
+            return false;
+        }
+        
+        // =============== PHASE 6: CONNECT ENGINES ===============
+        if(!ConnectEngines(m_symbol, confidenceBuyThreshold, confidenceSellThreshold, riskPercent)) {
+            Print("ERROR: Engine connection failed");
+            return false;
+        }
+        
+        m_initialized = true;
+        
+        // ============ VERIFY CONNECTION ============
+        if(m_confidenceEngine != NULL && m_decisionEngine != NULL) 
+        {
+            // Check if symbol was added
+            int symbolCount = m_decisionEngine.GetSymbolCount();
+            
+            if(symbolCount == 0) 
+            {
+                Print("WARN: No symbols in DecisionEngine - attempting emergency addition...");
+                
+                // Try to add manually as emergency fix
+                DecisionParams emergencyParams;
+                emergencyParams.buyConfidenceThreshold = confidenceBuyThreshold;
+                emergencyParams.sellConfidenceThreshold = confidenceSellThreshold;
+                emergencyParams.addPositionThreshold = confidenceBuyThreshold + 10.0;
+                emergencyParams.closePositionThreshold = confidenceBuyThreshold - 10.0;
+                emergencyParams.closeAllThreshold = confidenceBuyThreshold - 15.0;
+                emergencyParams.cooldownMinutes = 5;
+                emergencyParams.maxPositionsPerSymbol = 3;
+                emergencyParams.riskPercent = riskPercent;
+                
+                if(!m_decisionEngine.AddSymbol(m_symbol, emergencyParams)) 
+                {
+                    Print("ERROR: Emergency symbol addition failed!");
+                } 
+            }
+        }
+        
+        // ============ VERIFY ALL COMPONENTS ============
+        bool allComponents = m_logger != NULL && m_accountMgr != NULL && 
+                           m_riskMgr != NULL && m_posMgr != NULL && 
+                           m_decisionEngine != NULL && m_mtfEngine != NULL && 
+                           m_marketStructure != NULL && m_confidenceEngine != NULL;
+        
+        if(!allComponents) 
+        {
+            Print("WARN: Some components failed to initialize");
+        }
+        
+        // Start ConfidenceEngine trading session
+        if(m_confidenceEngine != NULL) 
+        {
+            m_confidenceEngine.StartTradingSession();
+            if(m_logger != NULL) 
+            {
+                m_logger.KeepNotes("SYSTEM", AUTHORIZE, "SystemInitializer", 
+                    "Trading session started for ConfidenceEngine");
+            }
+        } 
+        
+        if(m_logger != NULL)
+        {
+            m_logger.KeepNotes("SYSTEM", AUTHORIZE, "Initializer", "System initialized successfully");
+        }
+        
+        Print("========================================");
+        Print("SYSTEM INITIALIZATION COMPLETE");
+        Print("========================================");
+        
+        return true;
+    }
+    
+    // Event forwarding
+    void OnTick()
+    {
+        if(!m_initialized) return;
+        
+        static int tickCounter = 0;
+        static datetime lastStatusLog = 0;
+        tickCounter++;
+        
+        // Log status only every 100 ticks or every minute
+        datetime currentTime = TimeCurrent();
+        if((tickCounter % 100 == 0 || (currentTime - lastStatusLog) >= 60) && m_logger != NULL) 
+        {
+            lastStatusLog = currentTime;
+            m_logger.KeepNotes("SYSTEM", OBSERVE, "SystemInitializer_OnTick", 
+                StringFormat("Tick #%d", tickCounter), 
+                false, false, 0.0);
+        }
+        
+        // Emergency fix: If DecisionEngine has no symbols after 3 ticks, add them
+        if(tickCounter == 3 && m_decisionEngine != NULL) 
+        {
+            if(m_decisionEngine.GetSymbolCount() == 0) 
+            {
+                Print("EMERGENCY: DecisionEngine has no symbols after 3 ticks!");
+                string currentSymbol = Symbol();
+                EmergencyAddSymbolToDecisionEngine(currentSymbol);
+            }
+        }
+        
+        // Execute in logical order
+        if(m_accountMgr != NULL) m_accountMgr.OnTick();
+        if(m_riskMgr != NULL) m_riskMgr.OnTick();
+
+        if(m_mtfScorer != NULL) m_mtfScorer.OnTick();
+
+        if(m_orderBlock != NULL) m_orderBlock.OnTick();
+
+        if(m_mtfEngine != NULL) m_mtfEngine.OnTick();
+
+        if(m_marketStructure != NULL) m_marketStructure.OnTick();
+
+        // ============ SAFETY CHECK - BEFORE ConfidenceEngine ============
+        if(m_confidenceEngine != NULL && !m_confidenceEngine.IsTradingSessionActive()) 
+        {
+            m_confidenceEngine.StartTradingSession();
+            if(m_logger != NULL) 
+            {
+                m_logger.KeepNotes("SYSTEM", WARN, "SystemInitializer", 
+                    "ConfidenceEngine session was inactive - forcing start");
+            }
+        }
+        // ================================================================
+        
+        // Now safe to run ConfidenceEngine
+        if(m_confidenceEngine != NULL) m_confidenceEngine.OnTick();
+        
+        // ============ DECISION ENGINE PROCESSING ============
+        if(m_decisionEngine != NULL) 
+        {
+            m_decisionEngine.OnTick();
+        }
+        
+        // PositionManager should be last
+        if(m_posMgr != NULL) m_posMgr.OnTick();
+    }
+    
+    void OnTimer()
+    {
+        if(!m_initialized) return;
+        
+        if(m_accountMgr != NULL) m_accountMgr.OnTimer();
+        if(m_riskMgr != NULL) m_riskMgr.OnTimer();
+
+        if(m_mtfScorer != NULL) m_mtfScorer.OnTimer();
+
+        if(m_marketStructure != NULL) m_marketStructure.OnTimer();
+
+        if(m_posMgr != NULL) m_posMgr.OnTimer();
+        if(m_decisionEngine != NULL) m_decisionEngine.OnTimer();
+    }
+    
+    void OnTrade()
+    {
+        if(!m_initialized) return;
+        
+        if(m_decisionEngine != NULL) m_decisionEngine.OnTradeTransaction();
+    }
+    
+    // Cleanup in reverse dependency order
+    void CleanupAll()
+    {
+        Print("System cleanup started");
+        
+        // Reset global pointer first
+        g_confidenceEngine = NULL;
+        
+        // Cleanup in reverse dependency order
+        delete m_decisionEngine; 
+        m_decisionEngine = NULL;
+        
+        delete m_posMgr; 
+        m_posMgr = NULL;
+        
+        delete m_confidenceEngine; 
+        m_confidenceEngine = NULL;
+        
+        delete m_marketStructure; 
+        m_marketStructure = NULL;
+        
+        delete m_orderBlock; 
+        m_orderBlock = NULL;
+        
+        delete m_mtfEngine; 
+        m_mtfEngine = NULL;
+        
+        delete m_mtfScorer; 
+        m_mtfScorer = NULL;
+        
+        delete m_riskMgr; 
+        m_riskMgr = NULL;
+        
+        delete m_accountMgr; 
+        m_accountMgr = NULL;
+        
+        // Logger last
+        delete m_logger; 
+        m_logger = NULL;
+        
+        Print("System cleanup complete");
+    }
+    
+    // Getters (FIXED - these are class methods, not global functions)
+    bool IsInitialized() const { return m_initialized; }
+    string GetErrorMessage() const { return m_errorMessage; }
+    
+    ResourceManager* GetLogger() const { return m_logger; }
+    AccountManager* GetAccountManager() const { return m_accountMgr; }
+    RiskManager* GetRiskManager() const { return m_riskMgr; }
+    MTFScorer* GetMTFScorer() const { return m_mtfScorer; }
+    COrderBlock* GetOrderBlock() const { return m_orderBlock; }
+    MTFEngine* GetMTFEngine() const { return m_mtfEngine; }
+    MarketStructureEngine* GetMarketStructure() const { return m_marketStructure; }  // Fixed typo
+    ConfidenceEngine* GetConfidenceEngine() const { return m_confidenceEngine; }
+    PositionManager* GetPositionManager() const { return m_posMgr; }
+    DecisionEngine* GetDecisionEngine() const { return m_decisionEngine; }
+    
+    // Add this public method to manually trigger debug
+    void ForceDebug()
+    {
+        DebugEngineStatus();
+    }
+};

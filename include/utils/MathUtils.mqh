@@ -270,22 +270,22 @@ double CalculateExpectedValue(double winRatePercent, double avgWin, double avgLo
 
 // ============ MONEY MANAGEMENT CALCULATIONS ============
 
-//+------------------------------------------------------------------+
-//| CalculatePositionSizeByRisk - Calculate lot size based on risk %|
-//+------------------------------------------------------------------+
-double CalculatePositionSizeByRisk(string symbol, double entryPrice, 
-                                 double stopLoss, double riskPercent)
-{
-    double riskAmount = accountBalance * (riskPercent / 100);
-    double riskPerLot = CalculatePositionRisk(symbol, entryPrice, stopLoss, 1.0);
+// //+------------------------------------------------------------------+
+// //| CalculatePositionSizeByRisk - Calculate lot size based on risk %|
+// //+------------------------------------------------------------------+
+// double CalculatePositionSizeByRisk(string symbol, double entryPrice, 
+//                                  double stopLoss, double riskPercent)
+// {
+//     double riskAmount = accountBalance * (riskPercent / 100);
+//     double riskPerLot = CalculatePositionRisk(symbol, entryPrice, stopLoss, 1.0);
     
-    if(riskPerLot == 0)
-        return 0;
+//     if(riskPerLot == 0)
+//         return 0;
     
-    double lotSize = riskAmount / riskPerLot;
+//     double lotSize = riskAmount / riskPerLot;
     
-    return NormalizeLotSize(symbol, lotSize);
-}
+//     return NormalizeLotSize(symbol, lotSize);
+// }
 
 //+------------------------------------------------------------------+
 //| CalculateKellyCriterion - Calculate optimal position size       |

@@ -6,7 +6,6 @@
 #include "../config/inputs.mqh"
 #include "../config/GlobalVariables.mqh"
 #include "../config/structures.mqh"
-#include "utils.mqh"
 
 // ============ STRUCTURES ============
 
@@ -593,12 +592,12 @@ bool ValidatePositionCount(string symbol)
 //+------------------------------------------------------------------+
 //| Log Trade Details                                               |
 //+------------------------------------------------------------------+
-void LogTrade(string symbol, string direction, double lot, double sl, double tp, string reason)
+void LogTrade(string symbol, string m_direction, double lot, double sl, double tp, string reason)
 {
     // You can implement logging to file or database here
     string logEntry = StringFormat("%s,%s,%.3f,%.5f,%.5f,%s",
                                    TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
-                                   direction, lot, sl, tp, reason);
+                                   m_direction, lot, sl, tp, reason);
     
     // Example: Write to file
     // int file = FileOpen("trades.csv", FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI);

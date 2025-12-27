@@ -5,7 +5,6 @@
 
 #include "../config/inputs.mqh"
 #include "../config/GlobalVariables.mqh"
-#include "utils.mqh"
 
 // ============ STRUCTURES ============
 
