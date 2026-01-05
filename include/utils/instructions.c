@@ -1135,3 +1135,614 @@ TradePackage.ProcessAndExecute() → DecisionEngine → Trade Execution
 
 
 
+To call the existing `GenerateDetailedTabularDisplay()` function from `TradePackage` and a similar display function from your Decision Engine (I'll assume it exists), you need to expose them through a public interface. Here's how to do it:
+
+## 1. First, let me see what you have in Decision Engine (you mentioned `DisplayDecisionEngineView`)
+
+Since I don't have your Decision Engine code, I'll show you two approaches:
+
+## Approach 1: Simple Method Calls (If you have instance access)
+
+### In your main EA, if you have instances:
+```mql4
+// Main EA
+
+// Assuming you have these instances somewhere
+TradePackage tradePackage;
+// DecisionEngine decisionEngine; // Your decision engine instance
+
+// Call the display functions
+void DisplayTradePackage() {
+    string displayText = tradePackage.GenerateDetailedTabularDisplay();
+    Logger::DisplaySingleFrame(displayText);
+}
+
+void DisplayDecisionEngine() {
+    // If you have a method in DecisionEngine like:
+    // decisionEngine.DisplayDecisionEngineView();
+    // or if it's a static method:
+    // DecisionEngine::DisplayDecisionEngineView();
+}
+```
+
+## Approach 2: Create a Display Manager Interface (Recommended)
+
+Create a simple interface class to manage all displays:
+
+```mql4
+// DisplayManager.mqh
+#include "Data/TradePackage.mqh"
+// #include "DecisionEngine.mqh" // Include your decision engine
+
+class DisplayManager {
+public:
+    // Method to display TradePackage
+    static void DisplayTradePackage(const TradePackage &package) {
+        string displayText = package.GenerateDetailedTabularDisplay();
+        Logger::DisplaySingleFrame(displayText);
+    }
+    
+    // Method to display Decision Engine view
+    static void DisplayDecisionEngineView() {
+        // Option A: If you have a static method
+        // DecisionEngine::DisplayDecisionEngineView();
+        
+        // Option B: If you need an instance
+        // DecisionEngine engine;
+        // engine.DisplayView();
+        
+        // Option C: If you need to pass parameters
+        // DecisionEngine::DisplayView("EURUSD", PERIOD_H1);
+    }
+    
+    // Combined display
+    static void DisplayAll(const TradePackage &package) {
+        DisplayTradePackage(package);
+        DisplayDecisionEngineView();
+    }
+};
+```
+
+## Approach 3: Direct Call in OnTick() or OnTimer()
+
+In your main EA's event handlers:
+
+```mql4
+// Main EA (Example)
+#include "Data/TradePackage.mqh"
+#include "Utils/DisplayManager.mqh" // If using Approach 2
+
+// Global/class member
+TradePackage g_tradePackage;
+
+// In OnTick() or a timer function
+void OnTick() {
+    // Your trading logic...
+    
+    // Display when needed (e.g., on button press or condition)
+    if(ShouldDisplay()) {
+        // Direct call
+        string tpDisplay = g_tradePackage.GenerateDetailedTabularDisplay();
+        Logger::DisplaySingleFrame(tpDisplay);
+        
+        // Or using DisplayManager
+        DisplayManager::DisplayTradePackage(g_tradePackage);
+    }
+}
+
+// Or create a custom function
+void ShowCurrentAnalysis() {
+    // 1. Display Trade Package
+    string tpText = g_tradePackage.GenerateDetailedTabularDisplay();
+    Logger::DisplaySingleFrame("=== TRADE PACKAGE ===");
+    Logger::DisplaySingleFrame(tpText);
+    
+    // 2. Display Decision Engine View
+    // This depends on how your DecisionEngine is structured
+    // If it has a static method:
+    // DecisionEngine::DisplayDecisionEngineView();
+    
+    // If it's an instance:
+    // if(g_decisionEngine != NULL) {
+    //     g_decisionEngine.DisplayView();
+    // }
+}
+```
+
+## Approach 4: Event-Driven Display
+
+Add keyboard shortcuts or chart events:
+
+```mql4
+// In OnChartEvent()
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam) {
+    if(id == CHARTEVENT_KEYDOWN) {
+        // F2 key to display Trade Package
+        if(lparam == 113) { // F2 key code
+            DisplayTradePackageNow();
+        }
+        // F3 key to display Decision Engine
+        else if(lparam == 114) { // F3 key code
+            DisplayDecisionEngineNow();
+        }
+    }
+}
+
+void DisplayTradePackageNow() {
+    TradePackage currentPackage; // Or use your existing instance
+    // Populate with current data...
+    string display = currentPackage.GenerateDetailedTabularDisplay();
+    Comment(display); // Or use your Logger
+}
+
+void DisplayDecisionEngineNow() {
+    // Call your decision engine display method
+}
+```
+
+## Quick Solution for TradePackage:
+
+Since you already have the working `GenerateDetailedTabularDisplay()` method in `TradePackage`, you can simply:
+
+1. **Make sure the method is public** (it is, since it's in the class definition)
+2. **Create a TradePackage instance** in your main EA
+3. **Populate it with data** (from your modules)
+4. **Call the method** when needed
+
+```mql4
+// Minimal working example in main EA:
+#include <Data/TradePackage.mqh>
+
+TradePackage g_currentPackage;
+
+void UpdateAndDisplayPackage() {
+    // 1. Update package with current data (from your modules)
+    g_currentPackage.SetMTFData(...);
+    g_currentPackage.SetPOIData(...);
+    // ... set other data
+    
+    // 2. Calculate and validate
+    g_currentPackage.CalculateDirectionAnalysis();
+    g_currentPackage.CalculateWeightedScore();
+    g_currentPackage.ValidatePackage();
+    
+    // 3. Display
+    string display = g_currentPackage.GenerateDetailedTabularDisplay();
+    Logger::DisplaySingleFrame(display);
+}
+```
+
+## For Decision Engine:
+
+You need to check what method is available. If you don't have `DisplayDecisionEngineView()`, look for similar display methods like:
+- `Display()`
+- `ShowView()`
+- `GenerateDisplay()`
+- `GetDisplayText()`
+
+## Summary:
+
+1. **TradePackage**: Already has `GenerateDetailedTabularDisplay()` - just call it on an instance
+2. **Decision Engine**: Need to check the exact method name and how to call it
+3. **Integration**: Either call directly or create a DisplayManager helper class
+
+**Which approach do you prefer?** If you can show me your Decision Engine class definition, I can give you the exact code to call its display method.
+
+
++++++++++++++++++++++++++++++++++++++++++++
+
+could you clear all displays here and call them directly in the most simple way
+
+//+------------------------------------------------------------------+
+//|                           mk$.mq5                                |
+//|                    Enhanced Trading EA with 6-Component Analysis |
+//+------------------------------------------------------------------+
+#property copyright "Copyright 2024"
+#property link      "yourwebsite.com"
+#property version   "3.00"
+#property strict
+
+// ====================== DEBUG SETTINGS ======================
+bool DEBUG_ENABLED_EA = true;
+
+void DebugLogEA(string context, string message) {
+   if(DEBUG_ENABLED_EA) Logger::Log("DEBUG-EA-" + context, message, true, true);
+}
+
+// ============================================================
+// INCLUDES
+// ============================================================
+#include "include/Utils/Logger.mqh"
+#include "include/Data/IndicatorManager.mqh"
+#include "include/Core/DecisionEngine.mqh"
+#include "include/Data/POIModule.mqh"
+#include "include/Core/PackageManager.mqh"
+
+// ============================================================
+// INPUT PARAMETERS
+// ============================================================
+input int TimerInterval = 5;
+input bool POI_Enabled = true;
+
+// Package Manager Configuration
+input bool UseMTFModule = true;
+input bool UsePOIModule = true;
+input bool UseVolumeModule = true;
+input bool UseRSIModule = true;
+input bool UseMACDModule = true;
+input bool UseCandlePatternsModule = true;
+
+input int PackageUpdateInterval = 10;
+
+// Decision Engine Configuration
+input bool UseDecisionEngine = true;
+input double MaxRiskPerTrade = 1.0;
+input int PositionCooldownMinutes = 30;
+input bool UseAutoExecution = true;
+
+// ============================================================
+// GLOBAL DECLARATIONS
+// ============================================================
+IndicatorManager* g_indicatorManager = NULL;
+DecisionEngine decisionEngine;
+POIModule poiModule;
+TradePackageManager* g_packageManager = NULL;
+
+// ============================================================
+// DISPLAY TOGGLE SYSTEM (NUMBER KEYS 0-9)
+// ============================================================
+
+enum DISPLAY_MODE {
+    DISPLAY_NONE = 0,
+    DISPLAY_DECISION_ENGINE_ONLY = 1,
+    DISPLAY_TRADE_PACKAGE_ONLY = 2,
+    DISPLAY_COMPONENTS_VIEW = 3,
+    DISPLAY_DECISION_ENGINE_VIEW = 4,
+    DISPLAY_COMBINED_VIEW = 5,
+    DISPLAY_TRADE_PACKAGE_TABULAR = 6,
+    DISPLAY_TRADE_PACKAGE_DETAILED = 7,
+    DISPLAY_POI = 8,
+    DISPLAY_ALL_MODULES = 9
+};
+
+DISPLAY_MODE g_currentDisplay = DISPLAY_NONE;
+
+// ============================================================
+// CHART EVENT HANDLER FOR KEYBOARD SHORTCUTS
+// ============================================================
+void OnChartEvent(const int id, const long& lparam, const double& dparam, const string& sparam) {
+    // Handle keyboard events
+    if(id == CHARTEVENT_KEYDOWN) {  // Use CHARTEVENT_KEYDOWN instead of CHART_EVENT_KEYDOWN
+        int keyCode = (int)lparam;
+        
+        // Handle number keys 0-9
+        if(keyCode >= '0' && keyCode <= '9') {
+            int displayNum = keyCode - '0';
+            g_currentDisplay = (DISPLAY_MODE)displayNum;
+            
+            // Update display immediately
+            UpdateDisplay();
+            
+            PrintFormat("Display mode changed to: %d", displayNum);
+        }
+    }
+}
+
+// ============================================================
+// SIMPLE DISPLAY UPDATER - CALLS EXISTING FUNCTIONS
+// ============================================================
+void UpdateDisplay() {
+    // DO NOT clear comment here - let the functions handle it
+    
+    switch(g_currentDisplay) {
+        case DISPLAY_NONE:
+            Comment("");  // Clear only for NONE mode
+            return;
+            
+        case DISPLAY_DECISION_ENGINE_ONLY:
+            decisionEngine.DisplayDecisionEngineOnly();
+            break;
+            
+        case DISPLAY_TRADE_PACKAGE_ONLY:
+            if(g_packageManager != NULL && g_packageManager.IsInitialized()) {
+                TradePackage package = g_packageManager.GetTradePackage(false);
+                package.Display();
+            }
+            break;
+            
+        case DISPLAY_COMPONENTS_VIEW:
+            decisionEngine.DisplayComponentsView();
+            break;
+            
+        case DISPLAY_DECISION_ENGINE_VIEW:
+            decisionEngine.DisplayDecisionEngineView();
+            break;
+            
+        case DISPLAY_COMBINED_VIEW:
+            decisionEngine.DisplayCombinedView();
+            break;
+            
+        case DISPLAY_TRADE_PACKAGE_TABULAR:
+            if(g_packageManager != NULL && g_packageManager.IsInitialized()) {
+                TradePackage package = g_packageManager.GetTradePackage(false);
+                package.DisplayTabular();
+            }
+            break;
+            
+        case DISPLAY_TRADE_PACKAGE_DETAILED:
+            if(g_packageManager != NULL && g_packageManager.IsInitialized()) {
+                TradePackage package = g_packageManager.GetTradePackage(false);
+                package.DisplayDetailedTabular();
+            }
+            break;
+            
+        case DISPLAY_POI:
+            // Simple POI display
+            if(POI_Enabled) {
+                string display = "=== POI MODULE ===\n";
+                display += "Status: ACTIVE\n";
+                display += "Symbol: " + Symbol() + "\n";
+                display += "Time: " + TimeToString(TimeCurrent(), TIME_SECONDS) + "\n";
+                display += "\nPress 0 to clear, 1-9 for other views";
+                Comment(display);
+            } else {
+                Comment("POI Module: DISABLED\nEnable in inputs\nPress 0-9 to switch views");
+            }
+            break;
+            
+        case DISPLAY_ALL_MODULES:
+            {
+                string display = "=== ALL MODULES ===\n";
+                display += TimeToString(TimeCurrent(), TIME_SECONDS) + "\n\n";
+                
+                // Decision Engine status
+                display += "DECISION ENGINE:\n";
+                display += decisionEngine.GetStatus() + "\n\n";
+                
+                // Trade Package status
+                display += "TRADE PACKAGE:\n";
+                if(g_packageManager != NULL && g_packageManager.IsInitialized()) {
+                    TradePackage package = g_packageManager.GetTradePackage(false);
+                    if(package.isValid) {
+                        display += StringFormat("Confidence: %.1f%%\n", package.overallConfidence);
+                        display += StringFormat("Direction: %s\n", package.directionAnalysis.dominantDirection);
+                    } else {
+                        display += "No valid package\n";
+                    }
+                } else {
+                    display += "Package Manager not available\n";
+                }
+                
+                // POI status
+                display += "\nPOI MODULE:\n";
+                display += POI_Enabled ? "ACTIVE" : "DISABLED";
+                
+                display += "\n\nType 0-9 to switch views";
+                Comment(display);
+            }
+            break;
+    }
+}
+
+// ============================================================
+// INITIALIZATION FUNCTION
+// ============================================================
+int OnInit()
+{
+    Print("=== INITIALIZING mk$ EA v3.00 ===");
+    
+    // Initialize Logger
+    if(!Logger::Initialize()) {
+        Print("ERROR: Failed to initialize Logger");
+        return INIT_FAILED;
+    }
+    
+    // Create IndicatorManager
+    g_indicatorManager = new IndicatorManager();
+    if(!g_indicatorManager.Initialize()) {
+        Print("ERROR: Failed to initialize IndicatorManager");
+        delete g_indicatorManager;
+        return INIT_FAILED;
+    }
+    
+    // Create PackageManager
+    g_packageManager = new TradePackageManager();
+    if(g_packageManager == NULL) {
+        Print("ERROR: Failed to create TradePackageManager");
+        delete g_indicatorManager;
+        return INIT_FAILED;
+    }
+    
+    // Configure PackageManager
+    g_packageManager.ConfigureModules(
+        UseMTFModule, UsePOIModule, UseVolumeModule, 
+        UseRSIModule, UseMACDModule, UseCandlePatternsModule
+    );
+    
+    if(!g_packageManager.Initialize(Symbol(), Period(), g_indicatorManager)) {
+        Print("ERROR: Failed to initialize TradePackageManager");
+        delete g_packageManager;
+        delete g_indicatorManager;
+        return INIT_FAILED;
+    }
+    
+    // Initialize POI Module
+    if(POI_Enabled && !poiModule.Initialize(Symbol(), true, 2.0, 3)) {
+        Print("WARNING: Failed to initialize POI Module");
+    }
+    
+    // Initialize DecisionEngine
+    if(!decisionEngine.Initialize("mk$ 6-Component Mode", 10000, UseAutoExecution)) {
+        Print("ERROR: Failed to initialize DecisionEngine");
+        delete g_packageManager;
+        delete g_indicatorManager;
+        return INIT_FAILED;
+    }
+    
+    // Configure DecisionEngine
+    DecisionParams params;
+    params.riskPercent = MaxRiskPerTrade;
+    params.cooldownMinutes = PositionCooldownMinutes;
+    params.buyConfidenceThreshold = 65.0;
+    params.sellConfidenceThreshold = 65.0;
+    
+    if(!decisionEngine.RegisterSymbol(Symbol(), params)) {
+        Print("ERROR: Failed to register symbol");
+        delete g_packageManager;
+        delete g_indicatorManager;
+        decisionEngine.Deinitialize();
+        return INIT_FAILED;
+    }
+    
+    // Set up timer
+    if(TimerInterval > 0) EventSetTimer(TimerInterval);
+    
+    // Enable keyboard events
+    ChartSetInteger(0, CHART_EVENT_KEYDOWN, true);
+    
+    // Show keyboard shortcuts help
+    Print("\n=== DISPLAY CONTROLS ===");
+    Print("Press number keys 0-9:");
+    Print("0: Clear display");
+    Print("1: Decision Engine Only");
+    Print("2: Trade Package Only");
+    Print("3: Components View");
+    Print("4: Decision Engine View");
+    Print("5: Combined View");
+    Print("6: Trade Package Tabular");
+    Print("7: Trade Package Detailed");
+    Print("8: POI Display");
+    Print("9: All Modules Summary");
+    Print("==============================\n");
+    
+    // Start with Decision Engine display
+    g_currentDisplay = DISPLAY_DECISION_ENGINE_ONLY;
+    
+    Print("✅ mk$ EA v3.00 INITIALIZED - Press 0-9 to toggle displays");
+    return INIT_SUCCEEDED;
+}
+
+// ============================================================
+// TICK HANDLER
+// ============================================================
+void OnTick()
+{
+    static datetime lastPackageUpdate = 0;
+    static datetime lastDisplayUpdate = 0;
+    
+    // POI updates
+    if(POI_Enabled) poiModule.OnTick();
+    
+    // PackageManager updates
+    if(g_packageManager != NULL && g_packageManager.IsInitialized()) {
+        g_packageManager.OnTick();
+        
+        // Generate new package periodically
+        if(TimeCurrent() - lastPackageUpdate >= PackageUpdateInterval) {
+            lastPackageUpdate = TimeCurrent();
+            TradePackage freshPackage = g_packageManager.GetTradePackage(true);
+            
+            // Send MINIMAL interface to DecisionEngine
+            if(UseDecisionEngine && freshPackage.isValid) {
+                DecisionEngineInterface deInterface;
+                
+                // ONLY fields that DecisionEngine ACTUALLY needs:
+                deInterface.symbol = Symbol();
+                deInterface.overallConfidence = freshPackage.overallConfidence;
+                deInterface.analysisTime = TimeCurrent();
+                deInterface.isValid = freshPackage.isValid;
+                
+                // Get direction from available field
+                if(freshPackage.directionAnalysis.dominantDirection != "") {
+                    deInterface.dominantDirection = freshPackage.directionAnalysis.dominantDirection;
+                } else {
+                    deInterface.dominantDirection = "NEUTRAL";
+                }
+                
+                // Set defaults for other fields (DecisionEngine can work with defaults)
+                deInterface.weightedScore = freshPackage.overallConfidence;
+                deInterface.orderType = (deInterface.dominantDirection == "BULLISH") ? ORDER_TYPE_BUY : 
+                                       (deInterface.dominantDirection == "BEARISH") ? ORDER_TYPE_SELL : 
+                                       ORDER_TYPE_BUY_LIMIT;
+                deInterface.signalConfidence = freshPackage.overallConfidence;
+                deInterface.signalReason = "6-Component Analysis";
+                
+                // Trade setup defaults (DecisionEngine will calculate if needed)
+                deInterface.entryPrice = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+                deInterface.stopLoss = 0;
+                deInterface.takeProfit1 = 0;
+                deInterface.positionSize = 0.01;
+                
+                // MTF defaults
+                deInterface.mtfBullishCount = (deInterface.dominantDirection == "BULLISH") ? 4 : 2;
+                deInterface.mtfBearishCount = (deInterface.dominantDirection == "BEARISH") ? 4 : 2;
+                deInterface.mtfWeight = freshPackage.overallConfidence;
+                
+                // Send MINIMAL interface to DecisionEngine
+                decisionEngine.ProcessTradePackage(deInterface);
+            }
+        }
+    }
+    
+    // DecisionEngine updates
+    decisionEngine.OnTick();
+    
+    // Update display less frequently (every 2 seconds) to prevent blinking
+    if(TimeCurrent() - lastDisplayUpdate >= 2) {
+        lastDisplayUpdate = TimeCurrent();
+        UpdateDisplay();
+    }
+}
+
+// ============================================================
+// TIMER HANDLER
+// ============================================================
+void OnTimer()
+{
+    if(POI_Enabled) poiModule.OnTimer();
+    
+    if(g_packageManager != NULL && g_packageManager.IsInitialized()) {
+        g_packageManager.OnTimer();
+    }
+    
+    if(g_indicatorManager != NULL) {
+        g_indicatorManager.OnTimer();
+    }
+    
+    decisionEngine.OnTimer();
+}
+
+// ============================================================
+// CLEANUP FUNCTION
+// ============================================================
+void OnDeinit(const int reason)
+{
+    Print("=== DEINITIALIZING mk$ EA v3.00 ===");
+    
+    EventKillTimer();
+    
+    // Clear any display
+    Comment("");
+    
+    if(g_packageManager != NULL) delete g_packageManager;
+    if(g_indicatorManager != NULL) {
+        g_indicatorManager.Deinitialize();
+        delete g_indicatorManager;
+    }
+    
+    decisionEngine.Deinitialize();
+    Logger::Shutdown();
+    
+    Print("✅ DEINITIALIZATION COMPLETE");
+}
+
+// ============================================================
+// TRADE TRANSACTION HANDLER
+// ============================================================
+void OnTradeTransaction(const MqlTradeTransaction& trans,
+                       const MqlTradeRequest& request,
+                       const MqlTradeResult& result)
+{
+    if(POI_Enabled) poiModule.OnTradeTransaction(trans, request, result);
+    decisionEngine.OnTradeTransaction(trans, request, result);
+}

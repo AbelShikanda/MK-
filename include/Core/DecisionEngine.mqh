@@ -1103,6 +1103,23 @@ public:
         
         DebugLogFile("DISPLAY_COMBINED_COMPLETE", "Combined view displayed");
     }
+
+    // Add to DecisionEngine class (public section)
+    int GetMagicNumber(string symbol) const {
+        int index = FindSymbolIndex(symbol);
+        if(index >= 0) {
+            return m_symbolStates[index].magicNumber;
+        }
+        return 0;
+    }
+
+    // Also add this method to get symbol by index:
+    string GetSymbolAtIndex(int index) const {
+        if(index >= 0 && index < m_totalSymbols) {
+            return m_symbolStates[index].symbol;
+        }
+        return "";
+    }
     
 private:
     
