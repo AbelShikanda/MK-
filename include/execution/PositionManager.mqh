@@ -802,17 +802,73 @@ namespace PositionManager
         return total;
     }
     
-    // ==================== TRAILING STOP MANAGEMENT ====================
-    
-    void UpdateAllTrailingStops(int magicNumber = 0, double minProfitToTrail = 10.0, 
-                                ENUM_TIMEFRAMES structureTF = PERIOD_H1)
+    // ==================== SIMPLE STRUCTURAL TRAILING STOP ====================
+
+    double CalculateStructuralTrailingStop(string symbol, bool isBuy, double entryPrice, 
+                                        double currentPrice, double currentSL,
+                                        ENUM_TIMEFRAMES structureTF = PERIOD_H1)
     {
-        PositionDebugLog("TRAILING-SIMPLE", 
-            StringFormat("=== AUTO-TRAILING ALL POSITIONS === | Magic: %d | Min Profit: $%.2f | TF: %s",
-                       magicNumber, minProfitToTrail, TimeframeToString(structureTF)));
+        // Find swing point based on market structure
+        double swingPoint = 0;
+        double newStopLoss = currentSL;
         
-        int totalUpdated = 0;
-        int totalPositions = 0;
+        if(isBuy)
+        {
+            // For BUY: Find recent swing low (last 10 bars)
+            double swingLow = iLow(symbol, structureTF, iLowest(symbol, structureTF, MODE_LOW, 10, 1));
+            
+            // Add ATR buffer (10% of 14-period ATR)
+            double atrBuffer = iATR(symbol, PERIOD_CURRENT, 14) * 0.10;
+            
+            // Calculate new stop loss
+            newStopLoss = swingLow - atrBuffer;
+            
+            // Normalize to symbol digits
+            int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+            newStopLoss = NormalizeDouble(newStopLoss, digits);
+            
+            // Apply rules: must be above current SL, below current price, and above breakeven if profitable
+            if(newStopLoss <= currentSL) return currentSL; // No improvement
+            if(newStopLoss >= currentPrice) return currentSL; // Too close to price
+            
+            // If we have profit, don't move below entry
+            if(currentPrice > entryPrice && newStopLoss < entryPrice)
+                newStopLoss = entryPrice;
+                
+            return newStopLoss;
+        }
+        else // SELL
+        {
+            // For SELL: Find recent swing high (last 10 bars)
+            double swingHigh = iHigh(symbol, structureTF, iHighest(symbol, structureTF, MODE_HIGH, 10, 1));
+            
+            // Add ATR buffer
+            double atrBuffer = iATR(symbol, PERIOD_CURRENT, 14) * 0.10;
+            
+            // Calculate new stop loss
+            newStopLoss = swingHigh + atrBuffer;
+            
+            // Normalize to symbol digits
+            int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+            newStopLoss = NormalizeDouble(newStopLoss, digits);
+            
+            // Apply rules: must be below current SL, above current price, and below breakeven if profitable
+            if(newStopLoss >= currentSL) return currentSL; // No improvement
+            if(newStopLoss <= currentPrice) return currentSL; // Too close to price
+            
+            // If we have profit, don't move above entry
+            if(currentPrice < entryPrice && newStopLoss > entryPrice)
+                newStopLoss = entryPrice;
+                
+            return newStopLoss;
+        }
+    }
+
+    // ==================== TRAILING STOP MANAGER FUNCTION ====================
+
+    void UpdateTrailingStops(int magicNumber = 0, double minProfit = 10.0, ENUM_TIMEFRAMES tf = PERIOD_H1)
+    {
+        int updated = 0;
         
         for(int i = PositionsTotal() - 1; i >= 0; i--)
         {
@@ -821,109 +877,45 @@ namespace PositionManager
             
             if(PositionSelectByTicket(ticket))
             {
-                totalPositions++;
-                
-                // Filter by magic number if specified
+                // Filter by magic
                 int posMagic = (int)PositionGetInteger(POSITION_MAGIC);
                 if(magicNumber != 0 && posMagic != magicNumber) continue;
                 
+                // Get position data
                 string symbol = PositionGetString(POSITION_SYMBOL);
                 double profit = PositionGetDouble(POSITION_PROFIT);
                 double entry = PositionGetDouble(POSITION_PRICE_OPEN);
                 double currentSL = PositionGetDouble(POSITION_SL);
                 double currentTP = PositionGetDouble(POSITION_TP);
-                double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+                double price = PositionGetDouble(POSITION_PRICE_CURRENT);
                 bool isBuy = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
                 
-                PositionDebugLog("TRAILING-POSITION", 
-                    StringFormat("%s (%s): Entry=%.5f, Current SL=%.5f, Price=%.5f, P/L=$%.2f",
-                               symbol, isBuy ? "BUY" : "SELL", entry, currentSL, currentPrice, profit));
+                // Check minimum profit
+                if(profit < minProfit) continue;
                 
-                // Check minimum profit requirement
-                if(profit < minProfitToTrail)
-                {
-                    PositionDebugLog("TRAILING-SKIP", 
-                        StringFormat("Skipping - Profit $%.2f < Minimum $%.2f", profit, minProfitToTrail));
-                    continue;
-                }
+                // Calculate new trailing stop
+                double newSL = CalculateStructuralTrailingStop(symbol, isBuy, entry, price, currentSL, tf);
                 
-                // Calculate new structural trailing stop
-                double newSL = RiskCalculator::CalculateTrailingStop(
-                    symbol, 
-                    isBuy, 
-                    entry, 
-                    currentPrice, 
-                    currentSL,
-                    0,
-                    structureTF
-                );
-                
-                // Check if new SL is better
+                // Check if we should update
                 bool shouldUpdate = false;
                 
-                if(isBuy)
-                {
-                    if(newSL > currentSL && newSL < currentPrice)
-                    {
-                        shouldUpdate = true;
-                        PositionDebugLog("TRAILING-BUY", 
-                            StringFormat("✅ BUY: New SL %.5f > Current SL %.5f", newSL, currentSL));
-                    }
-                }
-                else
-                {
-                    if(newSL < currentSL && newSL > currentPrice)
-                    {
-                        shouldUpdate = true;
-                        PositionDebugLog("TRAILING-SELL", 
-                            StringFormat("✅ SELL: New SL %.5f < Current SL %.5f", newSL, currentSL));
-                    }
-                }
+                if(isBuy && newSL > currentSL && newSL < price)
+                    shouldUpdate = true;
+                else if(!isBuy && newSL < currentSL && newSL > price)
+                    shouldUpdate = true;
                 
-                // Update position if improved
+                // Update if needed
                 if(shouldUpdate)
                 {
                     CTrade trade;
-                    if(trade.PositionModify(ticket, newSL, currentTP))
-                    {
-                        totalUpdated++;
-                        PositionDebugLog("TRAILING-UPDATED", 
-                            StringFormat("✅ Position updated: SL %.5f -> %.5f (Locked profit: $%.2f)",
-                                       currentSL, newSL, profit));
-                    }
-                    else
-                    {
-                        int errorCode = GetLastError();
-                        PositionDebugLog("TRAILING-ERROR", 
-                            StringFormat("❌ Failed to update: Error %d", errorCode));
-                    }
-                    ExpertRemove();
-                }
-                else
-                {
-                    PositionDebugLog("TRAILING-NOCHANGE", "No improvement in SL");
+                    trade.PositionModify(ticket, newSL, currentTP);
+                    updated++;
                 }
             }
         }
         
-        PositionDebugLog("TRAILING-COMPLETE", 
-            StringFormat("Trailing complete: %d/%d positions updated", totalUpdated, totalPositions));
-    }
-    
-    // Helper function for timeframe string
-    string TimeframeToString(ENUM_TIMEFRAMES tf)
-    {
-        switch(tf)
-        {
-            case PERIOD_M1:  return "M1";
-            case PERIOD_M5:  return "M5";
-            case PERIOD_M15: return "M15";
-            case PERIOD_M30: return "M30";
-            case PERIOD_H1:  return "H1";
-            case PERIOD_H4:  return "H4";
-            case PERIOD_D1:  return "D1";
-            default: return "TF-" + IntegerToString(tf);
-        }
+        if(updated > 0)
+            Print(StringFormat("Updated %d trailing stops", updated));
     }
     
     // ==================== UTILITY FUNCTIONS ====================
