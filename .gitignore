@@ -419,3 +419,6 @@ FodyWeavers.xsd
 
 notes
 notes/
+mk$
+mk$.ex5
+*.ex5

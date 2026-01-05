@@ -1,1909 +1,1413 @@
 //+------------------------------------------------------------------+
-//| PositionManager.mqh - Simple OOP Position Management            |
+//|                     PositionManager.mqh                          |
+//|           Pure Functions for Position Management                 |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024"
-#property link      "yourwebsite.com"
 #property strict
 
-#include "../config/inputs.mqh"
-#include "../config/GlobalVariables.mqh"
-#include "../utils/SymbolUtils.mqh"
-#include "../utils/IndicatorUtils.mqh"
-#include "../risk/RiskManager.mqh"
-#include "../validation/ValidationEngine.mqh"
-#include "OrderManager.mqh"
-#include "../utils/System/sys.mqh"
+#include <Trade/Trade.mqh>
 
-//+------------------------------------------------------------------+
-//| PositionManager Class                                            |
-//+------------------------------------------------------------------+
-class PositionManager
+#include "../Headers/Enums.mqh"
+#include "../Headers/Structures.mqh"
+#include "RiskManager.mqh"
+#include "../Utils/Logger.mqh"
+#include "../Data/TradePackage.mqh"
+
+// ================= FORWARD DECLARATIONS =================
+
+// ==================== DEBUG SETTINGS ====================
+bool POSITION_DEBUG_ENABLED = true;
+
+// Simple debug function using Logger
+void PositionDebugLog(string context, string message) {
+   if(POSITION_DEBUG_ENABLED) {
+      Logger::Log(context, message, true, true);
+   }
+}
+
+// ==================== ENUMERATIONS ====================
+enum ENUM_CLOSE_PRIORITY 
 {
-private:
-    bool m_initialized;
+    CLOSE_SMALLEST_PROFIT,
+    CLOSE_BIGGEST_LOSS,
+    CLOSE_SMALLEST_LOSS,
+    CLOSE_OLDEST,
+    CLOSE_NEWEST
+};
+
+// ==================== POSITION MANAGER NAMESPACE ====================
+namespace PositionManager
+{
+    // ==================== VALIDATION FUNCTIONS ====================
     
-    // Core properties
-    string          m_expertComment;
-    int             m_expertMagic;
-    int             m_slippagePoints;
-    ResourceManager *m_logger;           // Optional logger
-    RiskManager     *m_riskManager;      // Risk manager instance
-    
-    // Trade counters
-    int             m_dailyTradesCount;
-    int             m_weeklyTradesCount;
-    int             m_monthlyTradesCount;
-    int             m_totalPositionsOpened;
-    int             m_totalPositionsClosed;
-    
-    // Tier 1 Optimizations: Cached handles and frequently used values
-    int             m_atrHandles[];
-    double          m_cachedPoint[];
-    static double   m_cachedPointGlobal;
-    static double   m_cachedAccountBalance;
-    static datetime m_lastBalanceCheck;
-    static datetime m_lastRiskCheck;
-    
-    // Logging control
-    static datetime m_lastStatusLog;
-    static int      m_tickCounter;
-    
-public:
-    // ================= CONSTRUCTOR & DESTRUCTOR =================
-    PositionManager() : 
-        m_initialized(false),
-        m_expertComment(""),
-        m_expertMagic(0),
-        m_slippagePoints(0),
-        m_logger(NULL),
-        m_riskManager(NULL),
-        m_dailyTradesCount(0),
-        m_weeklyTradesCount(0),
-        m_monthlyTradesCount(0),
-        m_totalPositionsOpened(0),
-        m_totalPositionsClosed(0)
+    bool ValidateStops(string symbol, bool isBuy, double entryPrice, double &stopLoss, double &takeProfit)
     {
-        // Constructor only sets default values - NO resource creation
-        ArrayResize(m_atrHandles, 0, 100);
-        ArrayResize(m_cachedPoint, 0, 100);
-    }
-    
-    ~PositionManager()
-    {
-        // Destructor - call Deinitialize if needed
-        if(m_initialized)
-        {
-            Deinitialize();
-        }
+        PositionDebugLog("POSITION-VALIDATE-STOPS", "=== COMPREHENSIVE STOP VALIDATION (DOLLARS) ===");
         
-        // Release all indicator handles
-        for(int i = ArraySize(m_atrHandles) - 1; i >= 0; i--)
+        double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+        double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+        int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+        double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
+        double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
+        
+        PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                    StringFormat("%s: Bid=%.5f, Ask=%.5f, Entry=%.5f, Digits=%d, Point=%.5f, Tick=%.5f",
+                                symbol, bid, ask, entryPrice, digits, point, tickSize));
+        
+        // Get current market prices for validation
+        double currentPrice = isBuy ? ask : bid;
+        
+        // Check if entry price is reasonable compared to current market
+        double priceDiffDollars = MathAbs(entryPrice - currentPrice);  // Dollar difference
+        if(priceDiffDollars > 10.0)  // More than $10 from current market
         {
-            if(m_atrHandles[i] != INVALID_HANDLE)
+            PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                        StringFormat("⚠️ Entry price %.5f is $%.2f from market %.5f", 
+                                    entryPrice, priceDiffDollars, currentPrice));
+            // For pending orders, this might be OK, but for market orders, adjust
+            if(entryPrice != currentPrice)
             {
-                IndicatorRelease(m_atrHandles[i]);
+                entryPrice = currentPrice;
+                PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                            StringFormat("✅ Using market price as entry: %.5f", entryPrice));
             }
         }
-    }
-    
-    // ================= PROPER INITIALIZATION =================
-    
-    // CONSTRUCTOR ALTERNATIVE - Minimal initialization (if needed)
-    void SetDefaults(string comment = "", int magic = 0, int slippage = 0)
-    {
-        // Only set values, no actual initialization
-        m_expertComment = comment;
-        m_expertMagic = magic;
-        m_slippagePoints = slippage;
-    }
-    
-    // INITIALIZE() - The ONE AND ONLY real initialization method
-    bool Initialize(string comment, int magic, int slippage, 
-                   ResourceManager *logger = NULL, RiskManager *riskManager = NULL)
-    {
-        // Early exit for invalid states
-        if(m_initialized) 
+        
+        // ==================== SYMBOL-SPECIFIC DISTANCE LIMITS IN DOLLARS ====================
+        double maxDistanceDollars = 15.0;  // Default maximum: $15
+        double minDistanceDollars = 7.0;    // Default minimum: $2.00
+        
+        if(symbol == "XAUUSD" || symbol == "GOLD")
         {
-            Print("PositionManager already initialized!");
-            return true;
+            maxDistanceDollars = 15.0;   // Maximum $15 for gold
+            minDistanceDollars = 7.0;    // Minimum $7 for gold
+            PositionDebugLog("POSITION-VALIDATE-STOPS", "✅ Gold detected - limits: $20-$100");
         }
-        
-        // Set parameters
-        m_expertComment = comment;
-        m_expertMagic = magic;
-        m_slippagePoints = slippage;
-        m_logger = logger;
-        m_riskManager = riskManager;
-        
-        // Reset counters
-        m_dailyTradesCount = 0;
-        m_weeklyTradesCount = 0;
-        m_monthlyTradesCount = 0;
-        m_totalPositionsOpened = 0;
-        m_totalPositionsClosed = 0;
-        
-        // Initialize static logging variables
-        m_lastStatusLog = 0;
-        m_tickCounter = 0;
-        
-        // Mark as initialized
-        m_initialized = true;
-        
-        PrintFormat("PositionManager successfully initialized: %s Magic: %d", comment, magic);
-        return true;
-    }
-    
-    // Deinitialize - cleanup counterpart
-    void Deinitialize()
-    {
-        if(!m_initialized) return;
-        
-        // Reset all pointers to external dependencies
-        m_logger = NULL;
-        m_riskManager = NULL;
-        
-        // Reset initialization flag
-        m_initialized = false;
-        
-        Print("PositionManager deinitialized");
-    }
-    
-    // Check if initialized
-    bool IsInitialized() const 
-    { 
-        return m_initialized; 
-    }
-    
-    // ================= EVENT HANDLERS (PROTECTED) =================
-    
-    // OnTick() - ONLY processes if initialized
-    void OnTick()
-    {
-        if(!m_initialized) return;
-        
-        // Increment tick counter for periodic logging
-        m_tickCounter++;
-        
-        // Execute regular tick-based operations (minimal logging)
-        CheckOpenPositions();
-        UpdateTrailingStops();
-        CheckProfitTargets();
-        UpdateCounters();
-    }
-    
-    // OnTimer() - ONLY processes if initialized
-    void OnTimer()
-    {
-        if(!m_initialized) return;
-        
-        // Execute timer-based operations (called periodically)
-        ResetDailyCountersIfNeeded();
-        
-        // Log status every 60 seconds
-        datetime now = TimeCurrent();
-        if(now > m_lastStatusLog + 60)
+        else if(symbol == "XAGUSD")
         {
-            LogStatusUpdate();
-            m_lastStatusLog = now;
+            maxDistanceDollars = 30.0;    // Maximum $30.00 for silver
+            minDistanceDollars = 10.30;   // Minimum $10.30 for silver
+            PositionDebugLog("POSITION-VALIDATE-STOPS", "✅ Silver detected - limits: $10.30-$30.00");
         }
-        
-        CheckRiskLimits();
-        UpdateStatistics();
-    }
-    
-    // OnTradeTransaction() - ONLY processes if initialized
-    void OnTradeTransaction(const MqlTradeTransaction& trans,
-                           const MqlTradeRequest& request,
-                           const MqlTradeResult& result)
-    {
-        if(!m_initialized) return;
-        
-        // Handle ALL transaction types in one place
-        switch(trans.type)
+        else if(symbol == "BTCUSD" || symbol == "ETHUSD")
         {
-            case TRADE_TRANSACTION_HISTORY_ADD:
-                HandleHistoryAdd(trans);
-                break;
-                
-            case TRADE_TRANSACTION_HISTORY_UPDATE:
-                HandleHistoryUpdate(trans);
-                break;
-                
-            case TRADE_TRANSACTION_HISTORY_DELETE:
-                HandleHistoryDelete(trans);
-                break;
-                
-            case TRADE_TRANSACTION_ORDER_ADD:
-            case TRADE_TRANSACTION_ORDER_UPDATE:
-            case TRADE_TRANSACTION_DEAL_ADD:
-                ProcessTradeTransaction(trans, request, result);
-                break;
-            
-            default:
-                break;
-        }
-    }
-    
-    // ================= CORE TRADE FUNCTIONS =================
-    
-    // Open a new position
-    bool OpenPosition(string symbol, bool isBuy, string reason = "ENTRY")
-    {
-        // Early exit conditions ordered from cheapest to most expensive
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return false;
-        }
-        
-        // Early exit for invalid symbol
-        if(symbol == "")
-            return false;
-            
-        if(!CanOpenNewPosition(symbol, isBuy))
-        {
-            if(m_logger != NULL)
-            {
-                m_logger.KeepNotes(symbol, WARN, "PositionManager", 
-                    "Position opening validation failed");
-            }
-            return false;
-        }
-        
-        // Use RiskManager for position size if available
-        double lotSize = 0;
-        if(m_riskManager != NULL)
-        {
-            // Get optimal stop loss from RiskManager first
-            double entryPrice = GetEntryPrice(symbol, isBuy);
-            double stopLoss = GetOptimalStopLoss(symbol, isBuy, entryPrice);
-            double point = GetCachedPoint(symbol);
-            double stopLossPips = MathAbs(entryPrice - stopLoss) / (point * 10.0);
-            
-            // Cache account balance with 5-second TTL
-            static datetime lastBalanceUpdate = 0;
-            static double cachedBalance = 0;
-            datetime now = TimeCurrent();
-            if(now > lastBalanceUpdate + 5)
-            {
-                cachedBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-                lastBalanceUpdate = now;
-            }
-            
-            // Use RiskManager's position sizing
-            lotSize = m_riskManager.CalculateRiskAdjustedPositionSizeFromCapital(
-                symbol, cachedBalance, stopLossPips);
+            maxDistanceDollars = 200.0;  // Maximum $200 for crypto
+            minDistanceDollars = 50.0;   // Minimum $50 for crypto
+            PositionDebugLog("POSITION-VALIDATE-STOPS", "✅ Crypto detected - limits: $50-$200");
         }
         else
         {
-            // Fallback to basic calculation
-            lotSize = CalculatePositionSize(symbol, isBuy);
+            // Forex - convert pips to dollars (approx 1 pip = $10 per lot)
+            // For 0.01 lots, 1 pip ≈ $0.10, so adjust accordingly
+            maxDistanceDollars = 20.0;   // Maximum $20 for forex (approx 200 pips)
+            minDistanceDollars = 1.5;    // Minimum $1.50 for forex (approx 15 pips)
+            PositionDebugLog("POSITION-VALIDATE-STOPS", "✅ Forex detected - limits: $1.50-$20.00");
+        }
+        // ==================== END SYMBOL-SPECIFIC LIMITS ====================
+        
+        // Validate stop loss
+        if(stopLoss > 0)
+        {
+            // Check direction
+            if((isBuy && stopLoss >= entryPrice) || (!isBuy && stopLoss <= entryPrice))
+            {
+                PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                            StringFormat("❌ Stop loss wrong direction: %s SL=%.5f %s Entry=%.5f",
+                                        isBuy ? "BUY" : "SELL", stopLoss, 
+                                        isBuy ? ">=" : "<=", entryPrice));
+                
+                // Auto-correct with reasonable distance
+                if(isBuy)
+                {
+                    stopLoss = entryPrice - minDistanceDollars;
+                    PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                                StringFormat("✅ Auto-corrected BUY SL to: %.5f ($%.2f below)", 
+                                            stopLoss, minDistanceDollars));
+                }
+                else
+                {
+                    stopLoss = entryPrice + minDistanceDollars;
+                    PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                                StringFormat("✅ Auto-corrected SELL SL to: %.5f ($%.2f above)", 
+                                            stopLoss, minDistanceDollars));
+                }
+            }
+            
+            // Check distance in dollars
+            double slDistanceDollars = isBuy ? (entryPrice - stopLoss) : (stopLoss - entryPrice);
+            
+            PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                        StringFormat("SL distance: $%.2f (entry: %.5f, sl: %.5f)", 
+                                    slDistanceDollars, entryPrice, stopLoss));
+            
+            // Check minimum distance
+            if(slDistanceDollars < minDistanceDollars)
+            {
+                PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                            StringFormat("⚠️ Stop loss too close: $%.2f < $%.2f min", 
+                                        slDistanceDollars, minDistanceDollars));
+                
+                if(isBuy)
+                {
+                    stopLoss = entryPrice - minDistanceDollars;
+                    PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                                StringFormat("✅ Adjusted BUY SL to min distance: %.5f ($%.2f)", 
+                                            stopLoss, minDistanceDollars));
+                }
+                else
+                {
+                    stopLoss = entryPrice + minDistanceDollars;
+                    PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                                StringFormat("✅ Adjusted SELL SL to min distance: %.5f ($%.2f)", 
+                                            stopLoss, minDistanceDollars));
+                }
+            }
+            
+            // Check maximum distance
+            if(slDistanceDollars > maxDistanceDollars)
+            {
+                PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                            StringFormat("⚠️ Stop loss too far: $%.2f > $%.2f max", 
+                                        slDistanceDollars, maxDistanceDollars));
+                
+                if(isBuy)
+                {
+                    stopLoss = entryPrice - maxDistanceDollars;
+                    PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                                StringFormat("✅ Adjusted BUY SL to max distance: %.5f ($%.2f)", 
+                                            stopLoss, maxDistanceDollars));
+                }
+                else
+                {
+                    stopLoss = entryPrice + maxDistanceDollars;
+                    PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                                StringFormat("✅ Adjusted SELL SL to max distance: %.5f ($%.2f)", 
+                                            stopLoss, maxDistanceDollars));
+                }
+            }
         }
         
+        // Validate take profit
+        if(takeProfit > 0)
+        {
+            // Check direction
+            if((isBuy && takeProfit <= entryPrice) || (!isBuy && takeProfit >= entryPrice))
+            {
+                PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                            StringFormat("❌ Take profit wrong direction: %s TP=%.5f %s Entry=%.5f",
+                                        isBuy ? "BUY" : "SELL", takeProfit,
+                                        isBuy ? "<=" : ">=", entryPrice));
+                
+                // Auto-correct with reasonable distance
+                if(isBuy)
+                {
+                    takeProfit = entryPrice + (minDistanceDollars * 1.5);  // 1.5x min distance above
+                    PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                                StringFormat("✅ Auto-corrected BUY TP to: %.5f ($%.1.5f above)", 
+                                            takeProfit, minDistanceDollars * 1.5));
+                }
+                else
+                {
+                    takeProfit = entryPrice - (minDistanceDollars * 1.5);  // 1.5x min distance below
+                    PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                                StringFormat("✅ Auto-corrected SELL TP to: %.5f ($%.1.5f below)", 
+                                            takeProfit, minDistanceDollars * 1.5));
+                }
+            }
+            
+            // Check distance in dollars
+            double tpDistanceDollars = isBuy ? (takeProfit - entryPrice) : (entryPrice - takeProfit);
+            
+            PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                        StringFormat("TP distance: $%.2f (entry: %.5f, tp: %.5f)", 
+                                    tpDistanceDollars, entryPrice, takeProfit));
+            
+            // Check minimum distance
+            if(tpDistanceDollars < minDistanceDollars)
+            {
+                PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                            StringFormat("⚠️ Take profit too close: $%.2f < $%.2f min", 
+                                        tpDistanceDollars, minDistanceDollars));
+                
+                if(isBuy)
+                {
+                    takeProfit = entryPrice + minDistanceDollars;
+                    PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                                StringFormat("✅ Adjusted BUY TP to min distance: %.5f ($%.2f)", 
+                                            takeProfit, minDistanceDollars));
+                }
+                else
+                {
+                    takeProfit = entryPrice - minDistanceDollars;
+                    PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                                StringFormat("✅ Adjusted SELL TP to min distance: %.5f ($%.2f)", 
+                                            takeProfit, minDistanceDollars));
+                }
+            }
+            
+            // Optional: Check maximum TP distance
+            double maxTpDistanceDollars = maxDistanceDollars * 3; // TP can be 3x further than SL
+            if(tpDistanceDollars > maxTpDistanceDollars)
+            {
+                PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                            StringFormat("⚠️ Take profit too far: $%.2f > $%.2f max", 
+                                        tpDistanceDollars, maxTpDistanceDollars));
+                
+                if(isBuy)
+                {
+                    takeProfit = entryPrice + maxTpDistanceDollars;
+                    PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                                StringFormat("✅ Adjusted BUY TP to max distance: %.5f ($%.2f)", 
+                                            takeProfit, maxTpDistanceDollars));
+                }
+                else
+                {
+                    takeProfit = entryPrice - maxTpDistanceDollars;
+                    PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                                StringFormat("✅ Adjusted SELL TP to max distance: %.5f ($%.2f)", 
+                                            takeProfit, maxTpDistanceDollars));
+                }
+            }
+        }
+        
+        // Normalize prices to broker requirements
+        stopLoss = NormalizePriceForBroker(symbol, stopLoss);
+        takeProfit = NormalizePriceForBroker(symbol, takeProfit);
+        
+        // Final validation
+        bool isValid = true;
+        
+        if(stopLoss > 0)
+        {
+            if((isBuy && stopLoss >= entryPrice) || (!isBuy && stopLoss <= entryPrice))
+            {
+                PositionDebugLog("POSITION-VALIDATE-STOPS", "❌ FINAL VALIDATION FAILED: Stop loss still invalid");
+                isValid = false;
+            }
+        }
+        
+        if(takeProfit > 0)
+        {
+            if((isBuy && takeProfit <= entryPrice) || (!isBuy && takeProfit >= entryPrice))
+            {
+                PositionDebugLog("POSITION-VALIDATE-STOPS", "❌ FINAL VALIDATION FAILED: Take profit still invalid");
+                isValid = false;
+            }
+        }
+        
+        PositionDebugLog("POSITION-VALIDATE-STOPS", 
+                    StringFormat("%s Final: Entry=%.5f, SL=%.5f, TP=%.5f",
+                                isValid ? "✅" : "❌", entryPrice, stopLoss, takeProfit));
+        
+        return isValid;
+    }
+
+    double NormalizePriceForBroker(string symbol, double price)
+    {
+        if(price <= 0) return price;
+        
+        PositionDebugLog("POSITION-NORMALIZE", StringFormat("Normalizing price %.5f for %s", price, symbol));
+        
+        double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+        int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+        
+        if(tickSize > 0)
+        {
+            // Ensure price is multiple of tick size
+            double normalized = NormalizeDouble(MathRound(price / tickSize) * tickSize, digits);
+            
+            PositionDebugLog("POSITION-NORMALIZE", StringFormat("Normalized: %.5f -> %.5f (tick: %.5f, digits: %d)", 
+                                        price, normalized, tickSize, digits));
+            return normalized;
+        }
+        
+        double normalized = NormalizeDouble(price, digits);
+        PositionDebugLog("POSITION-NORMALIZE", StringFormat("Normalized: %.5f -> %.5f (digits: %d)", 
+                                    price, normalized, digits));
+        return normalized;
+    }
+    
+    void LogStopErrorDetails(string symbol, bool isBuy, double entryPrice, double stopLoss, double takeProfit)
+    {
+        PositionDebugLog("POSITION-ERROR-4756", "=== ERROR 4756 DETAILS ===");
+        
+        double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+        // Corrected: Use SymbolInfoInteger instead of SymbolInfoDouble
+        double stopsLevel = (double)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+        double freezeLevel = (double)SymbolInfoInteger(symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+        double minStopDistance = stopsLevel * point;
+        
+        PositionDebugLog("POSITION-ERROR-4756", StringFormat("Symbol: %s | Buy: %s", symbol, isBuy ? "YES" : "NO"));
+        PositionDebugLog("POSITION-ERROR-4756", StringFormat("Entry: %.5f | SL: %.5f | TP: %.5f", 
+                                entryPrice, stopLoss, takeProfit));
+        PositionDebugLog("POSITION-ERROR-4756", StringFormat("Point: %.5f | StopsLevel: %.0f | FreezeLevel: %.0f", 
+                                point, stopsLevel, freezeLevel));
+        PositionDebugLog("POSITION-ERROR-4756", StringFormat("Min stop distance: %.5f (%.1f pips)", 
+                                minStopDistance, minStopDistance/point));
+        
+        if(isBuy)
+        {
+            double slDistance = entryPrice - stopLoss;
+            double tpDistance = (takeProfit > 0) ? (takeProfit - entryPrice) : 0;
+            PositionDebugLog("POSITION-ERROR-4756", StringFormat("BUY: SL distance: %.5f (%.1f pips) | TP distance: %.5f (%.1f pips)", 
+                                    slDistance, slDistance/point, tpDistance, tpDistance/point));
+        }
+        else
+        {
+            double slDistance = stopLoss - entryPrice;
+            double tpDistance = (takeProfit > 0) ? (entryPrice - takeProfit) : 0;
+            PositionDebugLog("POSITION-ERROR-4756", StringFormat("SELL: SL distance: %.5f (%.1f pips) | TP distance: %.5f (%.1f pips)", 
+                                    slDistance, slDistance/point, tpDistance, tpDistance/point));
+        }
+        
+        PositionDebugLog("POSITION-ERROR-4756", "=== END ERROR DETAILS ===");
+    }
+    
+    // ==================== POSITION OPERATIONS ====================
+    
+    bool OpenPosition(string symbol, bool isBuy, string comment = "", int magic = 0, 
+                 ENUM_STOP_METHOD stopMethod = STOP_ATR, double riskPercent = 2.0, 
+                 double rrRatio = 2.0, string reason = "Signal",
+                 double customEntry = 0, double customStopLoss = 0, double customTakeProfit = 0)
+    {
+        PositionDebugLog("POSITION-OPEN", StringFormat("=== OPENING POSITION === | Symbol: %s | Buy: %s | Magic: %d | Reason: %s | StopMethod: %d | Risk: %.2f%% | RR: %.2f",
+                                        symbol, isBuy ? "YES" : "NO", magic, reason, stopMethod, riskPercent, rrRatio));
+        
+        PositionDebugLog("POSITION-OPEN", StringFormat("Custom params - Entry: %.5f (provided: %s) | SL: %.5f | TP: %.5f",
+                                        customEntry, customEntry > 0 ? "YES" : "NO", customStopLoss, customTakeProfit));
+        
+        // ==================== POSITION LIMIT CHECK ====================
+        PositionDebugLog("POSITION-OPEN", "Checking position limits...");
+        
+        double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+        int maxTotalPositions, maxPositionsPerSymbol;
+        
+        // Get recommended limits based on account size
+        RiskCalculator::GetRecommendedPositionLimits(accountBalance, maxTotalPositions, maxPositionsPerSymbol);
+        
+        // Check if we can open a new position
+        if(!RiskCalculator::CanAddNewPosition(symbol, magic, maxTotalPositions, maxPositionsPerSymbol))
+        {
+            PositionDebugLog("POSITION-OPEN", "❌ Position limit check failed");
+            return false;
+        }
+        // ==================== END POSITION LIMIT CHECK ====================
+        
+        // Validate risk first
+        PositionDebugLog("POSITION-OPEN", "Validating risk constraints...");
+        if(!RiskCalculator::CanOpenTrade(5.0, 20.0))
+        {
+            PositionDebugLog("POSITION-OPEN", "❌ Risk validation failed");
+            return false;
+        }
+        
+        // Calculate entry price (use custom if provided, otherwise get market price)
+        PositionDebugLog("POSITION-OPEN", "Calculating entry price...");
+        double entryPrice = (customEntry > 0) ? customEntry : GetEntryPrice(symbol, isBuy);
+        PositionDebugLog("POSITION-OPEN", StringFormat("Entry price: %.5f (Custom: %s)", 
+                                    entryPrice, customEntry > 0 ? "YES" : "NO"));
+        
+        // Calculate stop loss (use custom if provided, otherwise calculate)
+        PositionDebugLog("POSITION-OPEN", "Calculating stop loss...");
+        double stopLoss = 0;
+        PositionDebugLog("POSITION-OPEN", StringFormat("Calculating stop loss using method: %d", stopMethod));
+        stopLoss = RiskCalculator::CalculateStopLoss(symbol, isBuy, entryPrice, stopMethod);
+        PositionDebugLog("POSITION-OPEN", StringFormat("Calculated stop loss: %.5f (Method: %d)", stopLoss, stopMethod));
+        
+        // Calculate position size using RiskCalculator
+        PositionDebugLog("POSITION-OPEN", "Calculating position size...");
+        double lotSize = RiskCalculator::CalculatePositionSize(symbol, entryPrice, stopLoss, riskPercent);
+        PositionDebugLog("POSITION-OPEN", StringFormat("Calculated lot size: %.3f (Risk: %.1f%%)", lotSize, riskPercent));
+        
+        // Validate lot size
         if(lotSize <= 0)
         {
-            if(m_logger != NULL)
-            {
-                m_logger.KeepNotes(symbol, ENFORCE, "PositionManager", 
-                    "Invalid lot size calculated");
-            }
+            PositionDebugLog("POSITION-OPEN", "❌ Invalid lot size");
             return false;
         }
         
-        // Calculate stop loss
-        double entryPrice = GetEntryPrice(symbol, isBuy);
-        double stopLoss = GetOptimalStopLoss(symbol, isBuy, entryPrice);
+        // ==================== SAFETY CHECK: LIMIT LOT SIZE FOR VOLATILE SYMBOLS ====================
         
-        // Validate stop loss with RiskManager if available
-        if(m_riskManager != NULL)
+        if(symbol == "XAUUSD" || symbol == "GOLD" || symbol == "XAGUSD")
         {
-            m_riskManager.ValidateStopLossPlacement(symbol, stopLoss, entryPrice, isBuy);
+            // Precious metals need much smaller lot sizes
+            double maxPreciousMetalLots = 0.5; // Maximum 0.5 lots for precious metals with $5000 account
+            
+            // Adjust based on account size
+            if(accountBalance >= 100)
+                maxPreciousMetalLots = 0.01;
+            else if(accountBalance >= 500)
+                maxPreciousMetalLots = 0.05;
+            else if(accountBalance >= 5000)
+                maxPreciousMetalLots = 5.0;
+            
+            if(lotSize > maxPreciousMetalLots)
+            {
+                PositionDebugLog("POSITION-OPEN", 
+                            StringFormat("⚠️ Reducing %s lot size from %.3f to %.3f (precious metal safety limit | Account: $%.2f)", 
+                                        symbol, lotSize, maxPreciousMetalLots, accountBalance));
+                lotSize = maxPreciousMetalLots;
+            }
         }
         
-        // Calculate take profit
-        double takeProfit = GetOptimalTakeProfit(symbol, isBuy, entryPrice, stopLoss);
-        
-        // Check exposure limits with RiskManager
-        if(m_riskManager != NULL && !m_riskManager.CheckExposureLimits(symbol, lotSize))
+        // For major forex pairs, also apply reasonable limits
+        string majors[] = {"EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD"};
+        bool isMajor = false;
+        for(int i = 0; i < ArraySize(majors); i++)
         {
-            if(m_logger != NULL)
+            if(symbol == majors[i])
             {
-                m_logger.KeepNotes(symbol, ENFORCE, "PositionManager", 
-                    "Exposure limits exceeded");
+                isMajor = true;
+                break;
             }
+        }
+
+        if(isMajor && lotSize > 10.0) // Cap major forex at 10 lots
+        {
+            PositionDebugLog("POSITION-OPEN", 
+                        StringFormat("⚠️ Capping %s lot size from %.3f to 50.0 (major forex safety limit)", 
+                                    symbol, lotSize));
+            lotSize = 50.0;
+        }
+        // ==================== END SAFETY CHECK ====================
+        
+        // Check margin
+        PositionDebugLog("POSITION-OPEN", "Checking margin requirements...");
+        if(!CheckMargin(symbol, lotSize))
+        {
+            PositionDebugLog("POSITION-OPEN", "❌ Insufficient margin");
             return false;
         }
         
-        // Final permission check with RiskManager
-        if(m_riskManager != NULL && !m_riskManager.AllowNewTrade(symbol, lotSize, reason))
+        // Calculate take profit (use custom if provided, otherwise calculate)
+        PositionDebugLog("POSITION-OPEN", "Calculating take profit...");
+        double takeProfit = 0;
+        PositionDebugLog("POSITION-OPEN", StringFormat("Calculating take profit with RR ratio: %.2f", rrRatio));
+        takeProfit = RiskCalculator::CalculateTakeProfit(symbol, isBuy, entryPrice, stopLoss, rrRatio);
+        PositionDebugLog("POSITION-OPEN", StringFormat("Calculated take profit: %.5f (RR: %.1f)", takeProfit, rrRatio));
+
+        
+        // VALIDATE STOPS BEFORE EXECUTION (CRITICAL FIX)
+        PositionDebugLog("POSITION-OPEN", "Validating stop levels...");
+        if(!ValidateStops(symbol, isBuy, entryPrice, stopLoss, takeProfit))
         {
-            if(m_logger != NULL)
-            {
-                m_logger.KeepNotes(symbol, ENFORCE, "PositionManager", 
-                    "RiskManager blocked the trade");
-            }
+            PositionDebugLog("POSITION-OPEN", "❌ Stop validation failed");
             return false;
         }
+        
+        // Normalize prices for broker requirements
+        stopLoss = NormalizePriceForBroker(symbol, stopLoss);
+        takeProfit = NormalizePriceForBroker(symbol, takeProfit);
+        PositionDebugLog("POSITION-OPEN", StringFormat("Normalized prices - SL: %.5f | TP: %.5f", stopLoss, takeProfit));
         
         // Execute trade
-        bool result = ExecuteTrade(symbol, isBuy, lotSize, stopLoss, takeProfit, reason);
+        PositionDebugLog("POSITION-OPEN", "Preparing to execute trade...");
+        CTrade trade;
+        trade.SetExpertMagicNumber(magic);
+        trade.SetDeviationInPoints(10);  // Default slippage
         
-        if(result)
-        {
-            m_dailyTradesCount++;
-            m_totalPositionsOpened++;
-            
-            // Log trade execution
-            PrintFormat("OPENED: New %s position for %s | Lot: %.3f | Entry: %.5f | SL: %.5f | TP: %.5f | Reason: %s",
-                isBuy ? "BUY" : "SELL", symbol, lotSize, entryPrice, stopLoss, takeProfit, reason);
-            
-            // Update RiskManager metrics
-            if(m_riskManager != NULL)
-            {
-                double point = GetCachedPoint(symbol);
-                double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
-                double riskAmount = MathAbs(entryPrice - stopLoss) * lotSize * contractSize;
-                m_riskManager.UpdatePerformanceMetrics(true, 0, riskAmount);
-            }
-        }
+        string fullComment = comment != "" ? comment + "_" + reason : reason;
         
-        return result;
-    }
-    
-    // Add to existing position
-    bool AddToPosition(string symbol, bool isBuy, string reason = "ADDITION")
-    {
-        // Early exit conditions
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return false;
-        }
+        PositionDebugLog("POSITION-OPEN", StringFormat("Executing %s: %.3f lots @ %.5f (SL: %.5f, TP: %.5f)",
+                                    isBuy ? "BUY" : "SELL", lotSize, entryPrice, stopLoss, takeProfit));
         
-        if(symbol == "")
-            return false;
-            
-        if(!CanAddToPosition(symbol, isBuy))
-        {
-            return false;
-        }
+        bool success = false;
+        if(isBuy)
+            success = trade.Buy(lotSize, symbol, entryPrice, stopLoss, takeProfit, fullComment);
+        else
+            success = trade.Sell(lotSize, symbol, entryPrice, stopLoss, takeProfit, fullComment);
+
         
-        // Check existing position direction
-        if(GetPositionDirection(symbol) != (isBuy ? POSITION_TYPE_BUY : POSITION_TYPE_SELL))
+        if(success)
         {
-            return false;
-        }
-        
-        // Get addition lot size
-        double lotSize = 0;
-        if(m_riskManager != NULL)
-        {
-            // Use RiskManager for position size
-            double entryPrice = GetEntryPrice(symbol, isBuy);
-            double avgStopLoss = GetAverageStopLoss(symbol, isBuy);
-            if(avgStopLoss <= 0)
-            {
-                avgStopLoss = GetOptimalStopLoss(symbol, isBuy, entryPrice);
-            }
+            PositionDebugLog("POSITION-OPEN", "✅ SUCCESS: Position opened");
             
-            double point = GetCachedPoint(symbol);
-            double stopLossPips = MathAbs(entryPrice - avgStopLoss) / (point * 10.0);
+            // Log trade
+            Logger::LogTrade("PositionManager", symbol, isBuy ? "BUY" : "SELL", lotSize, entryPrice);
+            Logger::ShowDecisionFast(symbol, isBuy ? 1 : -1, 0.9, 
+                                StringFormat("Entry: %.5f, SL: %.5f, TP: %.5f", 
+                                            entryPrice, stopLoss, takeProfit));
             
-            // Cache account balance
-            static datetime lastBalanceUpdate = 0;
-            static double cachedBalance = 0;
-            datetime now = TimeCurrent();
-            if(now > lastBalanceUpdate + 5)
-            {
-                cachedBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-                lastBalanceUpdate = now;
-            }
-            
-            // Calculate progressive position size based on existing positions
-            double progressiveMultiplier = 1.0 + (GetPositionCount(symbol) * 0.2);
-            lotSize = m_riskManager.CalculateRiskAdjustedPositionSizeFromCapital(
-                symbol, cachedBalance, stopLossPips);
-            lotSize *= progressiveMultiplier;
+            Logger::Log("PositionManager", 
+                    StringFormat("%s %s opened: %.3f lots @ %.5f (SL: %.5f, TP: %.5f, Risk: %.2f%%)",
+                                symbol, isBuy ? "BUY" : "SELL", lotSize, entryPrice,
+                                stopLoss, takeProfit, riskPercent));
+            // ExpertRemove();
+            return true;
         }
         else
         {
-            // Fallback to basic calculation
-            lotSize = CalculateProgressiveLotSize(symbol);
-        }
-        
-        if(lotSize <= 0)
-        {
-            return false;
-        }
-        
-        // Use average stop loss from existing positions
-        double avgStopLoss = GetAverageStopLoss(symbol, isBuy);
-        double entryPrice = GetEntryPrice(symbol, isBuy);
-        
-        // If no average stop loss, calculate new one
-        if(avgStopLoss <= 0)
-        {
-            avgStopLoss = GetOptimalStopLoss(symbol, isBuy, entryPrice);
-        }
-        
-        // Validate stop loss with RiskManager if available
-        if(m_riskManager != NULL)
-        {
-            m_riskManager.ValidateStopLossPlacement(symbol, avgStopLoss, entryPrice, isBuy);
-        }
-        
-        // Calculate take profit
-        double takeProfit = GetOptimalTakeProfit(symbol, isBuy, entryPrice, avgStopLoss);
-        
-        // Check exposure limits with RiskManager
-        if(m_riskManager != NULL && !m_riskManager.CheckExposureLimits(symbol, lotSize))
-        {
-            return false;
-        }
-        
-        // Final permission check with RiskManager
-        if(m_riskManager != NULL && !m_riskManager.AllowNewTrade(symbol, lotSize, reason))
-        {
-            return false;
-        }
-        
-        // Execute addition trade
-        bool result = ExecuteTrade(symbol, isBuy, lotSize, avgStopLoss, takeProfit, reason);
-        
-        if(result)
-        {
-            m_dailyTradesCount++;
-            m_totalPositionsOpened++;
+            int errorCode = GetLastError();
+            string errorDesc = "";
             
-            // Log trade addition
-            PrintFormat("ADDED: Additional %s position for %s | Lot: %.3f | Entry: %.5f | SL: %.5f | TP: %.5f | Reason: %s",
-                isBuy ? "BUY" : "SELL", symbol, lotSize, entryPrice, avgStopLoss, takeProfit, reason);
-            
-            // Update RiskManager metrics
-            if(m_riskManager != NULL)
+            // Enhanced error handling with 4756
+            switch(errorCode)
             {
-                double point = GetCachedPoint(symbol);
-                double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
-                double riskAmount = MathAbs(entryPrice - avgStopLoss) * lotSize * contractSize;
-                m_riskManager.UpdatePerformanceMetrics(true, 0, riskAmount);
+                case 10004: errorDesc = "Requote"; break;
+                case 10006: errorDesc = "Request rejected"; break;
+                case 10007: errorDesc = "Request canceled by trader"; break;
+                case 10010: errorDesc = "Only part of request executed"; break;
+                case 10011: errorDesc = "Request processing error"; break;
+                case 10012: errorDesc = "Request canceled by timeout"; break;
+                case 10013: errorDesc = "Invalid request"; break;
+                case 10014: errorDesc = "Invalid volume"; break;
+                case 10015: errorDesc = "Invalid price"; break;
+                case 10016: errorDesc = "Invalid stops (10016)"; break;
+                case 4756: errorDesc = "Invalid stops (4756) - Stop loss/take profit levels invalid"; break;
+                case 10017: errorDesc = "Trade disabled"; break;
+                case 10018: errorDesc = "Market closed"; break;
+                case 10019: errorDesc = "Insufficient funds"; break;
+                case 10020: errorDesc = "Price changed"; break;
+                case 10021: errorDesc = "Off quotes"; break;
+                case 10022: errorDesc = "Broker busy"; break;
+                case 10023: errorDesc = "Trade context busy"; break;
+                case 10024: errorDesc = "Expiration denied"; break;
+                case 10025: errorDesc = "Too many requests"; break;
+                case 10026: errorDesc = "No changes"; break;
+                case 10027: errorDesc = "Automated trading disabled"; break;
+                default: errorDesc = "Unknown error"; break;
             }
+            
+            PositionDebugLog("POSITION-OPEN", StringFormat("❌ FAILED: Trade execution error %d: %s", errorCode, errorDesc));
+            
+            // Special handling for error 4756
+            if(errorCode == 4756)
+            {
+                LogStopErrorDetails(symbol, isBuy, entryPrice, stopLoss, takeProfit);
+            }
+            
+            return false;
         }
-        
-        return result;
     }
     
-    // Close all positions for a symbol
-    bool CloseAllPositions(string symbol)
+    bool CloseAllPositions(string symbol = "", int magic = 0, string reason = "Close All")
     {
-        // Early exit
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return false;
-        }
+        PositionDebugLog("POSITION-CLOSE-ALL", StringFormat("=== CLOSING ALL POSITIONS === | Symbol: %s | Magic: %d | Reason: %s",
+                                       symbol != "" ? symbol : "ALL", magic, reason));
         
-        if(symbol == "")
-            return false;
-            
-        int totalPositions = PositionsTotal();
         int closedCount = 0;
+        int attemptedCount = 0;
         double totalProfit = 0;
+        double totalLoss = 0;
         
-        // Use backward iteration for series arrays
-        for(int i = totalPositions - 1; i >= 0; i--)
+        for(int i = PositionsTotal() - 1; i >= 0; i--)
         {
             ulong ticket = PositionGetTicket(i);
             if(ticket <= 0) continue;
             
             if(PositionSelectByTicket(ticket))
             {
-                if(PositionGetString(POSITION_SYMBOL) == symbol)
+                string posSymbol = PositionGetString(POSITION_SYMBOL);
+                int posMagic = (int)PositionGetInteger(POSITION_MAGIC);
+                double volume = PositionGetDouble(POSITION_VOLUME);
+                
+                if((symbol == "" || posSymbol == symbol) &&
+                   (magic == 0 || posMagic == magic))
                 {
                     double profit = PositionGetDouble(POSITION_PROFIT);
-                    if(ClosePosition(ticket))
+                    CTrade trade;
+                    attemptedCount++;
+                    
+                    PositionDebugLog("POSITION-CLOSE-ALL", StringFormat("Attempting to close position %d: %s | Volume: %.3f | Ticket: %d | Profit: $%.2f",
+                                                   i, posSymbol, volume, ticket, profit));
+                    
+                    if(trade.PositionClose(ticket))
                     {
                         closedCount++;
                         totalProfit += profit;
+                        if(profit < 0) totalLoss += profit;
+                        
+                        PositionDebugLog("POSITION-CLOSE-ALL", "✅ Position closed successfully");
+                        Logger::Log("PositionManager", 
+                                   StringFormat("Closed %s: %.3f lots, P/L: $%.2f", 
+                                               posSymbol, volume, profit),
+                                   false, false);
+                    }
+                    else
+                    {
+                        int errorCode = GetLastError();
+                        PositionDebugLog("POSITION-CLOSE-ALL", StringFormat("❌ Failed to close position: Error %d", errorCode));
+                        Logger::Log("PositionManager", 
+                                   StringFormat("Failed to close %s: Error %d", posSymbol, errorCode),
+                                   true, true);
                     }
                 }
             }
         }
         
-        if(closedCount > 0)
+        if(attemptedCount > 0)
         {
-            m_totalPositionsClosed += closedCount;
-            
-            PrintFormat("Closed %d positions for %s | Profit: %.2f", 
-                      closedCount, symbol, totalProfit);
-            
-            // Update RiskManager metrics
-            if(m_riskManager != NULL)
+            if(closedCount == attemptedCount)
             {
-                m_riskManager.UpdatePerformanceMetrics((totalProfit > 0), totalProfit, 0);
+                PositionDebugLog("POSITION-CLOSE-ALL", StringFormat("✅ SUCCESS: All %d positions closed | Total P/L: $%.2f | Losses: $%.2f", 
+                                                   closedCount, totalProfit, totalLoss));
+                Logger::Log("PositionManager", 
+                           StringFormat("All %d positions closed: $%.2f total", 
+                                       closedCount, totalProfit),
+                           true, true);
             }
+            else
+            {
+                PositionDebugLog("POSITION-CLOSE-ALL", StringFormat("⚠️ PARTIAL: Closed %d/%d positions | Total P/L: $%.2f", 
+                                                   closedCount, attemptedCount, totalProfit));
+                Logger::Log("PositionManager", 
+                           StringFormat("Partial close: %d/%d positions closed: $%.2f", 
+                                       closedCount, attemptedCount, totalProfit),
+                           true, true);
+            }
+            return closedCount > 0;
         }
         
-        return (closedCount > 0);
+        PositionDebugLog("POSITION-CLOSE-ALL", "⚠️ No positions to close matching criteria");
+        return false;
     }
     
-    // Close specific position by ticket
-    bool ClosePosition(ulong ticket)
+    bool CloseSinglePosition(ulong ticket, string reason = "Manual")
     {
-        // Early exit
-        if(!m_initialized) 
+        PositionDebugLog("POSITION-CLOSE-SINGLE", StringFormat("=== CLOSING SINGLE POSITION === | Ticket: %d | Reason: %s", ticket, reason));
+        
+        if(!PositionSelectByTicket(ticket))
         {
-            Print("Error: PositionManager not initialized!");
+            PositionDebugLog("POSITION-CLOSE-SINGLE", StringFormat("❌ Position not found: %d", ticket));
             return false;
         }
         
-        if(ticket <= 0)
-            return false;
-            
+        string symbol = PositionGetString(POSITION_SYMBOL);
+        double profit = PositionGetDouble(POSITION_PROFIT);
+        double volume = PositionGetDouble(POSITION_VOLUME);
+        
+        PositionDebugLog("POSITION-CLOSE-SINGLE", StringFormat("Closing %s: %.3f lots | Current P/L: $%.2f", symbol, volume, profit));
+        
         CTrade trade;
-        trade.SetExpertMagicNumber(m_expertMagic);
-        trade.SetDeviationInPoints(m_slippagePoints);
-        
-        bool result = trade.PositionClose(ticket, m_slippagePoints);
-        
-        if(result)
+        if(trade.PositionClose(ticket))
         {
-            m_totalPositionsClosed++;
+            PositionDebugLog("POSITION-CLOSE-SINGLE", "✅ Position closed successfully");
+            Logger::Log("PositionManager", 
+                       StringFormat("Closed %s (Ticket: %d): $%.2f", symbol, ticket, profit),
+                       false, false);
+            return true;
+        }
+        else
+        {
+            int errorCode = GetLastError();
+            PositionDebugLog("POSITION-CLOSE-SINGLE", StringFormat("❌ Failed to close position: Error %d", errorCode));
+            return false;
+        }
+    }
+    
+    // ==================== SMART CLOSE FUNCTIONS ====================
+    
+    bool SmartClosePositionEx(ENUM_CLOSE_PRIORITY priority, int magic, string &outClosedSymbol)
+    {
+        PositionDebugLog("POSITION-SMART-CLOSE", StringFormat("=== SMART CLOSE EXECUTION === | Priority: %d | Magic: %d", priority, magic));
+        
+        int totalPositions = GetPositionCount("", magic);
+        PositionDebugLog("POSITION-SMART-CLOSE", StringFormat("Found %d total positions for magic %d", totalPositions, magic));
+        
+        bool result = false;
+        switch(priority)
+        {
+            case CLOSE_SMALLEST_PROFIT:
+                PositionDebugLog("POSITION-SMART-CLOSE", "Strategy: Close smallest profit");
+                result = CloseSmallestProfit(magic, outClosedSymbol);
+                break;
+            case CLOSE_BIGGEST_LOSS:
+                PositionDebugLog("POSITION-SMART-CLOSE", "Strategy: Close biggest loss");
+                result = CloseBiggestLoss(magic, outClosedSymbol);
+                break;
+            case CLOSE_SMALLEST_LOSS:
+                PositionDebugLog("POSITION-SMART-CLOSE", "Strategy: Close smallest loss");
+                result = CloseSmallestLoss(magic, outClosedSymbol);
+                break;
+            case CLOSE_OLDEST:
+                PositionDebugLog("POSITION-SMART-CLOSE", "Strategy: Close oldest position");
+                result = CloseOldest(magic, outClosedSymbol);
+                break;
+            case CLOSE_NEWEST:
+                PositionDebugLog("POSITION-SMART-CLOSE", "Strategy: Close newest position");
+                result = CloseNewest(magic, outClosedSymbol);
+                break;
+            default:
+                PositionDebugLog("POSITION-SMART-CLOSE", "⚠️ Unknown priority, defaulting to smallest profit");
+                result = CloseSmallestProfit(magic, outClosedSymbol);
+                break;
+        }
+        
+        PositionDebugLog("POSITION-SMART-CLOSE", StringFormat("Smart close result: %s | Symbol: %s", 
+                                           result ? "✅ SUCCESS" : "❌ FAILED", outClosedSymbol));
+        return result;
+    }
+    
+    // ==================== POSITION ANALYSIS ====================
+    
+    int GetPositionCount(string symbol = "", int magic = 0)
+    {
+        PositionDebugLog("POSITION-ANALYSIS", StringFormat("Counting positions | Symbol: %s | Magic: %d", 
+                                          symbol != "" ? symbol : "ALL", magic));
+        
+        int count = 0;
+        
+        for(int i = PositionsTotal() - 1; i >= 0; i--)
+        {
+            ulong ticket = PositionGetTicket(i);
+            if(ticket <= 0) continue;
             
             if(PositionSelectByTicket(ticket))
             {
-                double profit = PositionGetDouble(POSITION_PROFIT);
-                string symbol = PositionGetString(POSITION_SYMBOL);
+                string posSymbol = PositionGetString(POSITION_SYMBOL);
+                int posMagic = (int)PositionGetInteger(POSITION_MAGIC);
                 
-                PrintFormat("Position %d closed for %s: $%.2f", (int)ticket, symbol, profit);
+                if((symbol == "" || posSymbol == symbol) &&
+                   (magic == 0 || posMagic == magic))
+                    count++;
             }
+        }
+        
+        PositionDebugLog("POSITION-ANALYSIS", StringFormat("Found %d positions", count));
+        return count;
+    }
+    
+    double GetTotalProfit(string symbol = "", int magic = 0)
+    {
+        PositionDebugLog("POSITION-ANALYSIS", StringFormat("Calculating total profit | Symbol: %s | Magic: %d", 
+                                          symbol != "" ? symbol : "ALL", magic));
+        
+        double total = 0;
+        int positionCount = 0;
+        
+        for(int i = PositionsTotal() - 1; i >= 0; i--)
+        {
+            ulong ticket = PositionGetTicket(i);
+            if(ticket <= 0) continue;
+            
+            if(PositionSelectByTicket(ticket))
+            {
+                string posSymbol = PositionGetString(POSITION_SYMBOL);
+                int posMagic = (int)PositionGetInteger(POSITION_MAGIC);
+                
+                if((symbol == "" || posSymbol == symbol) &&
+                   (magic == 0 || posMagic == magic))
+                {
+                    double profit = PositionGetDouble(POSITION_PROFIT);
+                    total += profit;
+                    positionCount++;
+                    
+                    PositionDebugLog("POSITION-ANALYSIS-DETAIL", StringFormat("Position %d: %s - $%.2f", 
+                                                           i, posSymbol, profit));
+                }
+            }
+        }
+        
+        PositionDebugLog("POSITION-ANALYSIS", StringFormat("Total profit: $%.2f from %d positions", total, positionCount));
+        return total;
+    }
+    
+    // ==================== TRAILING STOP MANAGEMENT ====================
+    
+    void UpdateAllTrailingStops(int magicNumber = 0, double minProfitToTrail = 10.0, 
+                                ENUM_TIMEFRAMES structureTF = PERIOD_H1)
+    {
+        PositionDebugLog("TRAILING-SIMPLE", 
+            StringFormat("=== AUTO-TRAILING ALL POSITIONS === | Magic: %d | Min Profit: $%.2f | TF: %s",
+                       magicNumber, minProfitToTrail, TimeframeToString(structureTF)));
+        
+        int totalUpdated = 0;
+        int totalPositions = 0;
+        
+        for(int i = PositionsTotal() - 1; i >= 0; i--)
+        {
+            ulong ticket = PositionGetTicket(i);
+            if(ticket <= 0) continue;
+            
+            if(PositionSelectByTicket(ticket))
+            {
+                totalPositions++;
+                
+                // Filter by magic number if specified
+                int posMagic = (int)PositionGetInteger(POSITION_MAGIC);
+                if(magicNumber != 0 && posMagic != magicNumber) continue;
+                
+                string symbol = PositionGetString(POSITION_SYMBOL);
+                double profit = PositionGetDouble(POSITION_PROFIT);
+                double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+                double currentSL = PositionGetDouble(POSITION_SL);
+                double currentTP = PositionGetDouble(POSITION_TP);
+                double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+                bool isBuy = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
+                
+                PositionDebugLog("TRAILING-POSITION", 
+                    StringFormat("%s (%s): Entry=%.5f, Current SL=%.5f, Price=%.5f, P/L=$%.2f",
+                               symbol, isBuy ? "BUY" : "SELL", entry, currentSL, currentPrice, profit));
+                
+                // Check minimum profit requirement
+                if(profit < minProfitToTrail)
+                {
+                    PositionDebugLog("TRAILING-SKIP", 
+                        StringFormat("Skipping - Profit $%.2f < Minimum $%.2f", profit, minProfitToTrail));
+                    continue;
+                }
+                
+                // Calculate new structural trailing stop
+                double newSL = RiskCalculator::CalculateTrailingStop(
+                    symbol, 
+                    isBuy, 
+                    entry, 
+                    currentPrice, 
+                    currentSL,
+                    0,
+                    structureTF
+                );
+                
+                // Check if new SL is better
+                bool shouldUpdate = false;
+                
+                if(isBuy)
+                {
+                    if(newSL > currentSL && newSL < currentPrice)
+                    {
+                        shouldUpdate = true;
+                        PositionDebugLog("TRAILING-BUY", 
+                            StringFormat("✅ BUY: New SL %.5f > Current SL %.5f", newSL, currentSL));
+                    }
+                }
+                else
+                {
+                    if(newSL < currentSL && newSL > currentPrice)
+                    {
+                        shouldUpdate = true;
+                        PositionDebugLog("TRAILING-SELL", 
+                            StringFormat("✅ SELL: New SL %.5f < Current SL %.5f", newSL, currentSL));
+                    }
+                }
+                
+                // Update position if improved
+                if(shouldUpdate)
+                {
+                    CTrade trade;
+                    if(trade.PositionModify(ticket, newSL, currentTP))
+                    {
+                        totalUpdated++;
+                        PositionDebugLog("TRAILING-UPDATED", 
+                            StringFormat("✅ Position updated: SL %.5f -> %.5f (Locked profit: $%.2f)",
+                                       currentSL, newSL, profit));
+                    }
+                    else
+                    {
+                        int errorCode = GetLastError();
+                        PositionDebugLog("TRAILING-ERROR", 
+                            StringFormat("❌ Failed to update: Error %d", errorCode));
+                    }
+                    ExpertRemove();
+                }
+                else
+                {
+                    PositionDebugLog("TRAILING-NOCHANGE", "No improvement in SL");
+                }
+            }
+        }
+        
+        PositionDebugLog("TRAILING-COMPLETE", 
+            StringFormat("Trailing complete: %d/%d positions updated", totalUpdated, totalPositions));
+    }
+    
+    // Helper function for timeframe string
+    string TimeframeToString(ENUM_TIMEFRAMES tf)
+    {
+        switch(tf)
+        {
+            case PERIOD_M1:  return "M1";
+            case PERIOD_M5:  return "M5";
+            case PERIOD_M15: return "M15";
+            case PERIOD_M30: return "M30";
+            case PERIOD_H1:  return "H1";
+            case PERIOD_H4:  return "H4";
+            case PERIOD_D1:  return "D1";
+            default: return "TF-" + IntegerToString(tf);
+        }
+    }
+    
+    // ==================== UTILITY FUNCTIONS ====================
+    
+    bool CheckMargin(string symbol, double lotSize, double safetyBuffer = 0.8)
+    {
+        PositionDebugLog("POSITION-MARGIN", StringFormat("Checking margin for %s: %.3f lots | Safety buffer: %.0f%%", 
+                                            symbol, lotSize, safetyBuffer * 100));
+        
+        // Get correct margin calculation
+        double marginRequired = 0;
+        double marginPerLot = SymbolInfoDouble(symbol, SYMBOL_MARGIN_INITIAL);
+        double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+        
+        PositionDebugLog("POSITION-MARGIN-DETAILS", 
+                    StringFormat("%s: Margin per lot=%.2f, Contract size=%.0f, Lots=%.3f", 
+                                symbol, marginPerLot, contractSize, lotSize));
+        
+        // Try different calculation methods
+        if(marginPerLot > 0)
+        {
+            // Standard calculation
+            marginRequired = marginPerLot * lotSize;
+            PositionDebugLog("POSITION-MARGIN-DETAILS", 
+                        StringFormat("Standard calculation: %.2f × %.3f = $%.2f", 
+                                    marginPerLot, lotSize, marginRequired));
+        }
+        else
+        {
+            // Alternative calculation for symbols without direct margin info
+            double price = SymbolInfoDouble(symbol, SYMBOL_BID);
+            marginRequired = (price * lotSize * contractSize) / 50.0; // 2% margin estimate
+            PositionDebugLog("POSITION-MARGIN-DETAILS", 
+                        StringFormat("Alternative calculation: %.2f × %.3f × %.0f / 50 = $%.2f", 
+                                    price, lotSize, contractSize, marginRequired));
+        }
+        
+        // Special handling for XAUUSD/Gold
+        if(symbol == "XAUUSD" || symbol == "GOLD")
+        {
+            PositionDebugLog("POSITION-MARGIN-GOLD", "⚠️ Gold detected - applying margin multiplier");
+            double goldMultiplier = 5.0; // Gold typically requires 5x more margin
+            marginRequired *= goldMultiplier;
+            PositionDebugLog("POSITION-MARGIN-GOLD", 
+                        StringFormat("Gold margin: $%.2f × %.1f = $%.2f", 
+                                    marginRequired/goldMultiplier, goldMultiplier, marginRequired));
+        }
+        
+        double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+        double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+        double marginLevel = (equity > 0) ? (freeMargin / equity) * 100 : 0;
+        
+        bool result = marginRequired <= freeMargin * safetyBuffer;
+        
+        PositionDebugLog("POSITION-MARGIN", StringFormat("Margin: Required: $%.2f | Free: $%.2f | Equity: $%.2f | Level: %.1f%%",
+                                            marginRequired, freeMargin, equity, marginLevel));
+        
+        if(!result)
+        {
+            PositionDebugLog("POSITION-MARGIN", StringFormat("❌ Margin check failed: Required $%.2f > Available $%.2f (%.0f%%)",
+                                                marginRequired, freeMargin * safetyBuffer, safetyBuffer * 100));
+        }
+        else
+        {
+            PositionDebugLog("POSITION-MARGIN", "✅ Margin check passed");
         }
         
         return result;
     }
     
-    // ================= VALIDATION FUNCTIONS =================
-    
-    bool CanOpenNewPosition(string symbol, bool isBuy)
-    {
-        // Early exit conditions
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return false;
-        }
-        
-        if(symbol == "")
-            return false;
-            
-        // Use RiskManager validation first if available
-        if(m_riskManager != NULL)
-        {
-            // Check if RiskManager allows new trades (cached check)
-            static datetime lastRiskCheck = 0;
-            static bool cachedCanTrade = true;
-            datetime now = TimeCurrent();
-            if(now > lastRiskCheck + 2) // 2-second cache
-            {
-                cachedCanTrade = m_riskManager.CanOpenNewTrades();
-                lastRiskCheck = now;
-            }
-            
-            if(!cachedCanTrade)
-            {
-                return false;
-            }
-            
-            // Check RiskManager's permission for this specific trade
-            if(!m_riskManager.AllowNewTrade(symbol, 0.01, "Pre-validation check"))
-            {
-                return false;
-            }
-            
-            // Check volatility and spread with caching
-            static string lastVolatilitySymbol = "";
-            static datetime lastVolatilityCheck = 0;
-            static bool cachedVolatility = true;
-            
-            if(symbol != lastVolatilitySymbol || now > lastVolatilityCheck + 5)
-            {
-                cachedVolatility = m_riskManager.IsVolatilityAcceptable(symbol) && 
-                                  m_riskManager.IsSpreadAcceptable(symbol);
-                lastVolatilitySymbol = symbol;
-                lastVolatilityCheck = now;
-            }
-            
-            if(!cachedVolatility)
-            {
-                return false;
-            }
-            
-            // Check margin sufficiency
-            double estimatedLots = 0.01; // Minimal lot for checking
-            if(!m_riskManager.IsMarginSufficient(symbol, estimatedLots))
-            {
-                return false;
-            }
-        }
-        
-        // Basic symbol validation
-        if(!SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE))
-        {
-            return false;
-        }
-        
-        // Max trades per symbol check
-        if(GetPositionCount(symbol) >= MaxTradesPerSymbol)
-        {
-            return false;
-        }
-        
-        return true;
-    }
-    
-    bool CanAddToPosition(string symbol, bool isBuy)
-    {
-        // Early exit
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return false;
-        }
-        
-        if(symbol == "")
-            return false;
-            
-        if(!CanOpenNewPosition(symbol, isBuy))
-        {
-            return false;
-        }
-        
-        // Check if we have existing positions in same direction
-        int existingPositions = GetPositionCount(symbol, isBuy);
-        if(existingPositions == 0)
-        {
-            return false;
-        }
-        
-        // Check addition distance
-        double currentPrice = GetEntryPrice(symbol, isBuy);
-        double avgPrice = GetAveragePrice(symbol, isBuy);
-        double allowedDistance = CalculateAllowedAdditionDistance(symbol);
-        double distance = MathAbs(currentPrice - avgPrice);
-        
-        if(distance > allowedDistance)
-        {
-            return false;
-        }
-        
-        return true;
-    }
-    
-    // ================= POSITION ANALYSIS =================
-    
-    int GetPositionCount(string symbol = "", bool isBuy = NULL)
-    {
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return 0;
-        }
-        
-        int totalPositions = PositionsTotal();
-        int count = 0;
-        
-        // Use backward iteration and cache array size
-        for(int i = totalPositions - 1; i >= 0; i--)
-        {
-            ulong ticket = PositionGetTicket(i);
-            if(ticket <= 0) continue;
-            
-            if(PositionSelectByTicket(ticket))
-            {
-                string posSymbol = PositionGetString(POSITION_SYMBOL);
-                
-                // Check symbol filter
-                if(symbol != "" && posSymbol != symbol)
-                    continue;
-                
-                // Check direction filter
-                if(isBuy != NULL)
-                {
-                    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-                    if((isBuy && posType != POSITION_TYPE_BUY) || 
-                       (!isBuy && posType != POSITION_TYPE_SELL))
-                        continue;
-                }
-                
-                count++;
-            }
-        }
-        
-        return count;
-    }
-    
-    double GetAveragePrice(string symbol, bool isBuy)
-    {
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return 0;
-        }
-        
-        if(symbol == "")
-            return 0;
-            
-        int totalPositions = PositionsTotal();
-        double totalPrice = 0;
-        double totalVolume = 0;
-        
-        // Use backward iteration
-        for(int i = totalPositions - 1; i >= 0; i--)
-        {
-            ulong ticket = PositionGetTicket(i);
-            if(ticket <= 0) continue;
-            
-            if(PositionSelectByTicket(ticket))
-            {
-                if(PositionGetString(POSITION_SYMBOL) == symbol)
-                {
-                    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-                    
-                    if((isBuy && posType == POSITION_TYPE_BUY) || 
-                       (!isBuy && posType == POSITION_TYPE_SELL))
-                    {
-                        double price = PositionGetDouble(POSITION_PRICE_OPEN);
-                        double volume = PositionGetDouble(POSITION_VOLUME);
-                        
-                        totalPrice += price * volume;
-                        totalVolume += volume;
-                    }
-                }
-            }
-        }
-        
-        if(totalVolume > 0)
-        {
-            static int cachedDigits = -1;
-            if(cachedDigits == -1)
-                cachedDigits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-                
-            return NormalizeDouble(totalPrice / totalVolume, cachedDigits);
-        }
-        
-        return 0;
-    }
-    
-    double GetAverageStopLoss(string symbol, bool isBuy)
-    {
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return 0;
-        }
-        
-        if(symbol == "")
-            return 0;
-            
-        int totalPositions = PositionsTotal();
-        double totalSL = 0;
-        int count = 0;
-        
-        for(int i = totalPositions - 1; i >= 0; i--)
-        {
-            ulong ticket = PositionGetTicket(i);
-            if(ticket <= 0) continue;
-            
-            if(PositionSelectByTicket(ticket))
-            {
-                if(PositionGetString(POSITION_SYMBOL) == symbol)
-                {
-                    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-                    
-                    if((isBuy && posType == POSITION_TYPE_BUY) || 
-                       (!isBuy && posType == POSITION_TYPE_SELL))
-                    {
-                        totalSL += PositionGetDouble(POSITION_SL);
-                        count++;
-                    }
-                }
-            }
-        }
-        
-        if(count > 0)
-        {
-            static int cachedDigits = -1;
-            if(cachedDigits == -1)
-                cachedDigits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-                
-            return NormalizeDouble(totalSL / count, cachedDigits);
-        }
-        
-        return 0;
-    }
-    
-    double GetTotalProfit(string symbol = "")
-    {
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return 0;
-        }
-        
-        int totalPositions = PositionsTotal();
-        double totalProfit = 0;
-        
-        for(int i = totalPositions - 1; i >= 0; i--)
-        {
-            ulong ticket = PositionGetTicket(i);
-            if(ticket <= 0) continue;
-            
-            if(PositionSelectByTicket(ticket))
-            {
-                string posSymbol = PositionGetString(POSITION_SYMBOL);
-                
-                if(symbol == "" || posSymbol == symbol)
-                {
-                    totalProfit += PositionGetDouble(POSITION_PROFIT);
-                }
-            }
-        }
-        
-        return totalProfit;
-    }
-    
-    ENUM_POSITION_TYPE GetPositionDirection(string symbol)
-    {
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return WRONG_VALUE;
-        }
-        
-        if(symbol == "")
-            return WRONG_VALUE;
-            
-        int totalPositions = PositionsTotal();
-        
-        for(int i = totalPositions - 1; i >= 0; i--)
-        {
-            ulong ticket = PositionGetTicket(i);
-            if(ticket <= 0) continue;
-            
-            if(PositionSelectByTicket(ticket))
-            {
-                if(PositionGetString(POSITION_SYMBOL) == symbol)
-                {
-                    return (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-                }
-            }
-        }
-        
-        return WRONG_VALUE;
-    }
-    
-    // ================= CALCULATION FUNCTIONS =================
-    
-    double CalculatePositionSize(string symbol, bool isBuy)
-    {
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return 0;
-        }
-        
-        if(symbol == "")
-            return 0;
-            
-        double lotSize = 0;
-        // Use RiskManager for position sizing
-        double entryPrice = GetEntryPrice(symbol, isBuy);
-        double stopLoss = GetOptimalStopLoss(symbol, isBuy, entryPrice);
-        double point = GetCachedPoint(symbol);
-        double stopLossPips = MathAbs(entryPrice - stopLoss) / (point * 10.0);
-        
-        if(m_riskManager != NULL)
-        {
-            // Cache account balance
-            static datetime lastBalanceUpdate = 0;
-            static double cachedBalance = 0;
-            datetime now = TimeCurrent();
-            if(now > lastBalanceUpdate + 5)
-            {
-                cachedBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-                lastBalanceUpdate = now;
-            }
-            
-            lotSize = m_riskManager.CalculateRiskAdjustedPositionSizeFromCapital(
-                symbol, cachedBalance, stopLossPips);
-        }
-        else
-        {
-            // Fallback to progressive position sizing
-            lotSize = CalculateProgressiveLotSize(symbol);
-        }
-        
-        // Apply min/max constraints
-        static double cachedMinLot = -1;
-        static double cachedMaxLot = -1;
-        
-        if(cachedMinLot == -1)
-            cachedMinLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-        if(cachedMaxLot == -1)
-            cachedMaxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-        
-        if(lotSize < cachedMinLot) lotSize = cachedMinLot;
-        if(lotSize > cachedMaxLot) lotSize = cachedMaxLot;
-        
-        return NormalizeDouble(lotSize, 2);
-    }
-    
-    double CalculateProgressiveLotSize(string symbol)
-    {
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return 0;
-        }
-        
-        if(symbol == "")
-            return 0;
-            
-        // Start with base lot
-        double baseLot = 0.01;
-        
-        // Increase based on number of existing positions
-        int existingPositions = GetPositionCount(symbol);
-        double multiplier = 1.0 + (existingPositions * 0.2); // 20% increase per addition
-        
-        double lotSize = baseLot * multiplier;
-        
-        // Apply constraints
-        static double cachedMinLot = -1;
-        static double cachedMaxLot = -1;
-        
-        if(cachedMinLot == -1)
-            cachedMinLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-        if(cachedMaxLot == -1)
-            cachedMaxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-        
-        if(lotSize < cachedMinLot) lotSize = cachedMinLot;
-        if(lotSize > cachedMaxLot) lotSize = cachedMaxLot;
-        
-        return NormalizeDouble(lotSize, 2);
-    }
-    
-    // Get optimal stop loss using RiskManager or fallback
-    double GetOptimalStopLoss(string symbol, bool isBuy, double entryPrice)
-    {
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return 0;
-        }
-        
-        if(symbol == "")
-            return 0;
-            
-        double stopLoss = 0;
-        
-        if(m_riskManager != NULL)
-        {
-            stopLoss = m_riskManager.GetOptimalStopLoss(symbol, entryPrice, isBuy);
-        }
-        else
-        {
-            stopLoss = CalculateDefaultStopLoss(symbol, isBuy, entryPrice);
-        }
-        
-        return stopLoss;
-    }
-    
-    double CalculateDefaultStopLoss(string symbol, bool isBuy, double entryPrice)
-    {
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return 0;
-        }
-        
-        if(symbol == "")
-            return 0;
-            
-        // ADD THIS NULL CHECK
-        if(m_riskManager == NULL)
-        {
-            // Fallback to fixed stop loss
-            double point = GetCachedPoint(symbol);
-            double stopDistance = 100.0 * point * 10; // 100 pips as fallback
-            
-            static int cachedDigits = -1;
-            if(cachedDigits == -1)
-                cachedDigits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-            
-            if(isBuy)
-                return NormalizeDouble(entryPrice - stopDistance, cachedDigits);
-            else
-                return NormalizeDouble(entryPrice + stopDistance, cachedDigits);
-        }
-        
-        double point = GetCachedPoint(symbol);
-        double minStopLossPips = m_riskManager.GetMinimumStopLoss(symbol);
-        
-        // Try ATR-based stop loss first
-        double atrStop = CalculateATRStopLoss(symbol, entryPrice, isBuy);
-        if(atrStop > 0) return atrStop;
-        
-        // Fallback: fixed stop loss
-        double stopDistance = minStopLossPips * point * 10;
-        
-        static int cachedDigits = -1;
-        if(cachedDigits == -1)
-            cachedDigits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-        
-        if(isBuy)
-            return NormalizeDouble(entryPrice - stopDistance, cachedDigits);
-        else
-            return NormalizeDouble(entryPrice + stopDistance, cachedDigits);
-    }
-    
-    // Get optimal take profit using RiskManager or fallback
-    double GetOptimalTakeProfit(string symbol, bool isBuy, double entryPrice, double stopLoss)
-    {
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return 0;
-        }
-        
-        if(symbol == "")
-            return 0;
-            
-        double takeProfit = 0;
-        
-        if(m_riskManager != NULL)
-        {
-            takeProfit = m_riskManager.GetOptimalTakeProfit(symbol, PERIOD_H1, entryPrice, stopLoss, isBuy);
-        }
-        else
-        {
-            takeProfit = CalculateDefaultTakeProfit(symbol, isBuy, entryPrice, stopLoss);
-        }
-        
-        return takeProfit;
-    }
-    
-    double CalculateDefaultTakeProfit(string symbol, bool isBuy, double entryPrice, double stopLoss)
-    {
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return 0;
-        }
-        
-        if(symbol == "")
-            return 0;
-            
-        double riskReward = RiskRewardRatio;
-        if(riskReward <= 0) riskReward = 1.5;
-        
-        double stopDistance = MathAbs(entryPrice - stopLoss);
-        double takeProfitDistance = stopDistance * riskReward;
-        
-        if(isBuy)
-            return entryPrice + takeProfitDistance;
-        else
-            return entryPrice - takeProfitDistance;
-    }
-    
-    double CalculateATRStopLoss(string symbol, double entryPrice, bool isBuy = true)
-    {
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return 0;
-        }
-        
-        if(symbol == "")
-            return 0;
-            
-        ENUM_TIMEFRAMES timeframe = PERIOD_M15;
-        int atrPeriod = 14;
-        
-        // Get or create cached ATR handle
-        int handleIndex = GetSymbolIndex(symbol);
-        if(handleIndex >= 0 && m_atrHandles[handleIndex] != INVALID_HANDLE)
-        {
-            double atrValue[1];
-            if(CopyBuffer(m_atrHandles[handleIndex], 0, 0, 1, atrValue) >= 1)
-            {
-                double atrMultiplier = 1.5;
-                double atrStop = atrValue[0] * atrMultiplier;
-                
-                static int cachedDigits = -1;
-                if(cachedDigits == -1)
-                    cachedDigits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-                
-                double stopPrice;
-                if(isBuy)
-                    stopPrice = entryPrice - atrStop;
-                else
-                    stopPrice = entryPrice + atrStop;
-                
-                return NormalizeDouble(stopPrice, cachedDigits);
-            }
-        }
-        
-        return 0;
-    }
-    
-    double CalculateAllowedAdditionDistance(string symbol)
-    {
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return 0;
-        }
-        
-        if(symbol == "")
-            return 0;
-            
-        double point = GetCachedPoint(symbol);
-        double atrValue[1];
-        
-        // Use cached ATR handle
-        int handleIndex = GetSymbolIndex(symbol);
-        if(handleIndex >= 0 && m_atrHandles[handleIndex] != INVALID_HANDLE)
-        {
-            if(CopyBuffer(m_atrHandles[handleIndex], 0, 0, 1, atrValue) >= 1)
-            {
-                return atrValue[0] * 0.5; // Allow within half ATR
-            }
-        }
-        
-        return 50 * point * 10; // Fallback: 50 pips
-    }
-    
-    bool HasSufficientMargin(string symbol, bool isBuy)
-    {
-        if(!m_initialized) 
-        {
-            Print("Error: PositionManager not initialized!");
-            return false;
-        }
-        
-        // Cache margin checks with 2-second TTL
-        static datetime lastMarginCheck = 0;
-        static double cachedFreeMargin = 0;
-        static double cachedEquity = 0;
-        datetime now = TimeCurrent();
-        
-        if(now > lastMarginCheck + 2)
-        {
-            cachedFreeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-            cachedEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-            lastMarginCheck = now;
-        }
-        
-        // Minimum 10% free margin
-        return (cachedFreeMargin >= (cachedEquity * 0.1));
-    }
-    
-    // Check if trading is allowed by RiskManager
-    bool IsTradingAllowed()
-    {
-        if(m_riskManager != NULL)
-        {
-            // Cache with 2-second TTL
-            static datetime lastAllowedCheck = 0;
-            static bool cachedAllowed = true;
-            datetime now = TimeCurrent();
-            
-            if(now > lastAllowedCheck + 2)
-            {
-                cachedAllowed = m_riskManager.CanOpenNewTrades();
-                lastAllowedCheck = now;
-            }
-            
-            return cachedAllowed;
-        }
-        return true;
-    }
-    
-    // Get current drawdown from RiskManager
-    double GetCurrentDrawdown()
-    {
-        if(m_riskManager != NULL)
-        {
-            // Cache with 5-second TTL
-            static datetime lastDrawdownCheck = 0;
-            static double cachedDrawdown = 0;
-            datetime now = TimeCurrent();
-            
-            if(now > lastDrawdownCheck + 5)
-            {
-                cachedDrawdown = m_riskManager.GetCurrentDrawdown();
-                lastDrawdownCheck = now;
-            }
-            
-            return cachedDrawdown;
-        }
-        return 0.0;
-    }
-    
-    // ================= INTERNAL TICK/TIMER METHODS =================
-    
-private:
-    void CheckOpenPositions()
-    {
-        int totalPositions = PositionsTotal();
-        
-        // Use backward iteration
-        for(int i = totalPositions - 1; i >= 0; i--)
-        {
-            ulong ticket = PositionGetTicket(i);
-            if(PositionSelectByTicket(ticket))
-            {
-                // Update position metrics
-                UpdatePositionMetrics(ticket);
-                
-                // Check for profit targets
-                CheckPositionProfitTarget(ticket);
-            }
-        }
-    }
-    
-    void UpdateTrailingStops()
-    {
-        if(m_riskManager != NULL)
-        {
-            m_riskManager.UpdateTrailingStops();
-        }
-    }
-    
-    void CheckProfitTargets()
-    {
-        int totalPositions = PositionsTotal();
-        
-        // Check if any positions have reached profit targets
-        for(int i = totalPositions - 1; i >= 0; i--)
-        {
-            ulong ticket = PositionGetTicket(i);
-            if(PositionSelectByTicket(ticket))
-            {
-                double profit = PositionGetDouble(POSITION_PROFIT);
-                double takeProfit = PositionGetDouble(POSITION_TP);
-                
-                // Check if profit target reached
-                if(takeProfit > 0 && profit > 0)
-                {
-                    // Optional: Close or adjust position
-                }
-            }
-        }
-    }
-    
-    void UpdateCounters()
-    {
-        // Update internal counters based on current positions
-        // Minimal logging in hot path
-    }
-    
-    void ResetDailyCountersIfNeeded()
-    {
-        // Check if it's a new day
-        MqlDateTime currentTime;
-        TimeToStruct(TimeCurrent(), currentTime);
-        
-        static int lastDay = -1;
-        if(lastDay == -1)
-        {
-            lastDay = currentTime.day;
-        }
-        
-        if(currentTime.day != lastDay)
-        {
-            // Reset daily counters
-            m_dailyTradesCount = 0;
-            lastDay = currentTime.day;
-        }
-    }
-    
-    void LogStatusUpdate()
-    {
-        // Log periodic status update every 60 seconds
-        if(m_logger != NULL)
-        {
-            m_logger.KeepNotes("SYSTEM", OBSERVE, "PositionManager", 
-                StringFormat("Status update - Active positions: %d, Daily trades: %d", 
-                PositionsTotal(), m_dailyTradesCount));
-        }
-    }
-    
-    void CheckRiskLimits()
-    {
-        if(m_riskManager != NULL)
-        {
-            // Check if risk limits are being approached
-            double drawdown = GetCurrentDrawdown();
-            if(drawdown > 20.0) // 20% drawdown threshold
-            {
-                if(m_logger != NULL)
-                {
-                    m_logger.KeepNotes("SYSTEM", WARN, "PositionManager", 
-                        StringFormat("Drawdown approaching limits: %.1f%%", drawdown));
-                }
-            }
-        }
-    }
-    
-    void UpdateStatistics()
-    {
-        // Update weekly and monthly statistics
-        static datetime lastWeekCheck = 0;
-        static datetime lastMonthCheck = 0;
-        
-        datetime now = TimeCurrent();
-        
-        // Check weekly reset
-        if(now - lastWeekCheck >= 7 * 24 * 60 * 60)
-        {
-            m_weeklyTradesCount = 0;
-            lastWeekCheck = now;
-        }
-        
-        // Check monthly reset
-        MqlDateTime timeStruct;
-        TimeToStruct(now, timeStruct);
-        if(timeStruct.mon != lastMonthCheck)
-        {
-            m_monthlyTradesCount = 0;
-            lastMonthCheck = timeStruct.mon;
-        }
-    }
-    
-    // ================= UTILITY FUNCTIONS =================
-    
     double GetEntryPrice(string symbol, bool isBuy)
     {
-        if(symbol == "")
-            return 0;
-            
-        double price = 0;
-        if(isBuy)
-            price = SymbolInfoDouble(symbol, SYMBOL_ASK);
-        else
-            price = SymbolInfoDouble(symbol, SYMBOL_BID);
+        double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
+        double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
+        double price = isBuy ? ask : bid;
+        
+        PositionDebugLog("POSITION-PRICE", StringFormat("Getting entry price for %s: %s | Bid: %.5f | Ask: %.5f | Price: %.5f",
+                                       symbol, isBuy ? "BUY" : "SELL", bid, ask, price));
         
         return price;
     }
     
-    bool ExecuteTrade(string symbol, bool isBuy, double lotSize, 
-                     double stopLoss, double takeProfit, string reason)
+    // ==================== PRIVATE CLOSE HELPERS ====================
+    
+    bool CloseSmallestProfit(int magic, string &outClosedSymbol)
     {
-        if(symbol == "")
-            return false;
+        PositionDebugLog("POSITION-CLOSE-HELPER", "Starting CloseSmallestProfit...");
+        double smallestProfit = DBL_MAX;
+        ulong ticketToClose = 0;
+        double volumeToClose = 0;
+        int positionType = -1;
+        
+        for(int i = PositionsTotal() - 1; i >= 0; i--)
+        {
+            ulong ticket = PositionGetTicket(i);
+            if(ticket <= 0) continue;
             
-        CTrade trade;
-        trade.SetExpertMagicNumber(m_expertMagic);
-        trade.SetDeviationInPoints(m_slippagePoints);
-        
-        string comment = m_expertComment + "_" + reason;
-        
-        bool result = false;
-        if(isBuy)
-        {
-            result = trade.Buy(lotSize, symbol, 0, stopLoss, takeProfit, comment);
+            if(PositionSelectByTicket(ticket))
+            {
+                int posMagic = (int)PositionGetInteger(POSITION_MAGIC);
+                if(magic != 0 && posMagic != magic) continue;
+                
+                double profit = PositionGetDouble(POSITION_PROFIT);
+                double volume = PositionGetDouble(POSITION_VOLUME);
+                string symbol = PositionGetString(POSITION_SYMBOL);
+                
+                PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("Evaluating %s: %.3f lots | Profit: $%.2f | Ticket: %d",
+                                                    symbol, volume, profit, ticket));
+                
+                if(MathAbs(profit) < MathAbs(smallestProfit))
+                {
+                    smallestProfit = profit;
+                    ticketToClose = ticket;
+                    outClosedSymbol = symbol;
+                    volumeToClose = volume;
+                    positionType = (int)PositionGetInteger(POSITION_TYPE);
+                    PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("New smallest profit: %s $%.2f", symbol, profit));
+                }
+            }
         }
-        else
+        
+        if(ticketToClose > 0)
         {
-            result = trade.Sell(lotSize, symbol, 0, stopLoss, takeProfit, comment);
+            PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("Closing %s: %.3f lots | Profit: $%.2f | Type: %s",
+                                                 outClosedSymbol, volumeToClose, smallestProfit,
+                                                 positionType == POSITION_TYPE_BUY ? "BUY" : "SELL"));
+            
+            CTrade trade;
+            if(trade.PositionClose(ticketToClose))
+            {
+                PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("✅ Closed smallest profit: %s $%.2f", 
+                                                    outClosedSymbol, smallestProfit));
+                Logger::Log("PositionManager", 
+                           StringFormat("Closed smallest profit (%s): $%.2f", outClosedSymbol, smallestProfit),
+                           false, false);
+                return true;
+            }
+            else
+            {
+                int errorCode = GetLastError();
+                PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("❌ Failed to close: Error %d", errorCode));
+                outClosedSymbol = "";
+                return false;
+            }
+        }
+        
+        outClosedSymbol = "";
+        PositionDebugLog("POSITION-CLOSE-HELPER", "❌ No positions to close");
+        return false;
+    }
+    
+    bool CloseBiggestLoss(int magic, string &outClosedSymbol)
+    {
+        PositionDebugLog("POSITION-CLOSE-HELPER", "Starting CloseBiggestLoss...");
+        double biggestLoss = DBL_MAX;
+        ulong ticketToClose = 0;
+        double volumeToClose = 0;
+        
+        for(int i = PositionsTotal() - 1; i >= 0; i--)
+        {
+            ulong ticket = PositionGetTicket(i);
+            if(ticket <= 0) continue;
+            
+            if(PositionSelectByTicket(ticket))
+            {
+                int posMagic = (int)PositionGetInteger(POSITION_MAGIC);
+                if(magic != 0 && posMagic != magic) continue;
+                
+                double profit = PositionGetDouble(POSITION_PROFIT);
+                double volume = PositionGetDouble(POSITION_VOLUME);
+                string symbol = PositionGetString(POSITION_SYMBOL);
+                
+                PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("Evaluating %s: %.3f lots | Profit: $%.2f", symbol, volume, profit));
+                
+                if(profit < 0 && profit < biggestLoss)
+                {
+                    biggestLoss = profit;
+                    ticketToClose = ticket;
+                    outClosedSymbol = symbol;
+                    volumeToClose = volume;
+                    PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("New biggest loss: %s $%.2f", symbol, profit));
+                }
+            }
+        }
+        
+        if(ticketToClose > 0)
+        {
+            PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("Closing biggest loss: %s: %.3f lots | Loss: $%.2f",
+                                                 outClosedSymbol, volumeToClose, biggestLoss));
+            
+            CTrade trade;
+            if(trade.PositionClose(ticketToClose))
+            {
+                PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("✅ Closed biggest loss: %s $%.2f", 
+                                                    outClosedSymbol, biggestLoss));
+                Logger::Log("PositionManager", 
+                           StringFormat("Closed biggest loss (%s): $%.2f", outClosedSymbol, biggestLoss),
+                           true, true);
+                return true;
+            }
+            else
+            {
+                int errorCode = GetLastError();
+                PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("❌ Failed to close: Error %d", errorCode));
+                outClosedSymbol = "";
+                return false;
+            }
+        }
+        
+        outClosedSymbol = "";
+        PositionDebugLog("POSITION-CLOSE-HELPER", "❌ No positions to close (no losses found)");
+        return false;
+    }
+    
+    bool CloseSmallestLoss(int magic, string &outClosedSymbol)
+    {
+        PositionDebugLog("POSITION-CLOSE-HELPER", "Starting CloseSmallestLoss...");
+        double smallestLoss = 0;
+        ulong ticketToClose = 0;
+        double volumeToClose = 0;
+        
+        for(int i = PositionsTotal() - 1; i >= 0; i--)
+        {
+            ulong ticket = PositionGetTicket(i);
+            if(ticket <= 0) continue;
+            
+            if(PositionSelectByTicket(ticket))
+            {
+                int posMagic = (int)PositionGetInteger(POSITION_MAGIC);
+                if(magic != 0 && posMagic != magic) continue;
+                
+                double profit = PositionGetDouble(POSITION_PROFIT);
+                double volume = PositionGetDouble(POSITION_VOLUME);
+                string symbol = PositionGetString(POSITION_SYMBOL);
+                
+                PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("Evaluating %s: %.3f lots | Profit: $%.2f", symbol, volume, profit));
+                
+                if(profit < 0 && profit > smallestLoss)
+                {
+                    smallestLoss = profit;
+                    ticketToClose = ticket;
+                    outClosedSymbol = symbol;
+                    volumeToClose = volume;
+                    PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("New smallest loss: %s $%.2f", symbol, profit));
+                }
+            }
+        }
+        
+        if(ticketToClose > 0)
+        {
+            PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("Closing smallest loss: %s: %.3f lots | Loss: $%.2f",
+                                                 outClosedSymbol, volumeToClose, smallestLoss));
+            
+            CTrade trade;
+            if(trade.PositionClose(ticketToClose))
+            {
+                PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("✅ Closed smallest loss: %s $%.2f", 
+                                                    outClosedSymbol, smallestLoss));
+                Logger::Log("PositionManager", 
+                           StringFormat("Closed smallest loss (%s): $%.2f", outClosedSymbol, smallestLoss),
+                           false, false);
+                return true;
+            }
+            else
+            {
+                int errorCode = GetLastError();
+                PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("❌ Failed to close: Error %d", errorCode));
+                outClosedSymbol = "";
+                return false;
+            }
+        }
+        
+        outClosedSymbol = "";
+        PositionDebugLog("POSITION-CLOSE-HELPER", "❌ No positions to close (no losses found)");
+        return false;
+    }
+    
+    bool CloseOldest(int magic, string &outClosedSymbol)
+    {
+        PositionDebugLog("POSITION-CLOSE-HELPER", "Starting CloseOldest...");
+        datetime oldestTime = D'3000.01.01';
+        ulong ticketToClose = 0;
+        double volumeToClose = 0;
+        double profitToClose = 0;
+        
+        for(int i = PositionsTotal() - 1; i >= 0; i--)
+        {
+            ulong ticket = PositionGetTicket(i);
+            if(ticket <= 0) continue;
+            
+            if(PositionSelectByTicket(ticket))
+            {
+                int posMagic = (int)PositionGetInteger(POSITION_MAGIC);
+                if(magic != 0 && posMagic != magic) continue;
+                
+                datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+                double profit = PositionGetDouble(POSITION_PROFIT);
+                double volume = PositionGetDouble(POSITION_VOLUME);
+                string symbol = PositionGetString(POSITION_SYMBOL);
+                
+                PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("Evaluating %s: Opened %s | Profit: $%.2f",
+                                                    symbol, TimeToString(openTime), profit));
+                
+                if(openTime < oldestTime)
+                {
+                    oldestTime = openTime;
+                    ticketToClose = ticket;
+                    outClosedSymbol = symbol;
+                    volumeToClose = volume;
+                    profitToClose = profit;
+                    PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("New oldest: %s opened %s", symbol, TimeToString(openTime)));
+                }
+            }
+        }
+        
+        if(ticketToClose > 0)
+        {
+            PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("Closing oldest: %s opened %s | Profit: $%.2f",
+                                                 outClosedSymbol, TimeToString(oldestTime), profitToClose));
+            
+            CTrade trade;
+            if(trade.PositionClose(ticketToClose))
+            {
+                PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("✅ Closed oldest: %s opened %s | P/L: $%.2f", 
+                                                    outClosedSymbol, TimeToString(oldestTime), profitToClose));
+                Logger::Log("PositionManager", 
+                           StringFormat("Closed oldest position (%s): $%.2f", outClosedSymbol, profitToClose),
+                           false, false);
+                return true;
+            }
+            else
+            {
+                int errorCode = GetLastError();
+                PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("❌ Failed to close: Error %d", errorCode));
+                outClosedSymbol = "";
+                return false;
+            }
+        }
+        
+        outClosedSymbol = "";
+        PositionDebugLog("POSITION-CLOSE-HELPER", "❌ No positions to close");
+        return false;
+    }
+    
+    bool CloseNewest(int magic, string &outClosedSymbol)
+    {
+        PositionDebugLog("POSITION-CLOSE-HELPER", "Starting CloseNewest...");
+        datetime newestTime = 0;
+        ulong ticketToClose = 0;
+        double volumeToClose = 0;
+        double profitToClose = 0;
+        
+        for(int i = PositionsTotal() - 1; i >= 0; i--)
+        {
+            ulong ticket = PositionGetTicket(i);
+            if(ticket <= 0) continue;
+            
+            if(PositionSelectByTicket(ticket))
+            {
+                int posMagic = (int)PositionGetInteger(POSITION_MAGIC);
+                if(magic != 0 && posMagic != magic) continue;
+                
+                datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+                double profit = PositionGetDouble(POSITION_PROFIT);
+                double volume = PositionGetDouble(POSITION_VOLUME);
+                string symbol = PositionGetString(POSITION_SYMBOL);
+                
+                PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("Evaluating %s: Opened %s | Profit: $%.2f",
+                                                    symbol, TimeToString(openTime), profit));
+                
+                if(openTime > newestTime)
+                {
+                    newestTime = openTime;
+                    ticketToClose = ticket;
+                    outClosedSymbol = symbol;
+                    volumeToClose = volume;
+                    profitToClose = profit;
+                    PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("New newest: %s opened %s", symbol, TimeToString(openTime)));
+                }
+            }
+        }
+        
+        if(ticketToClose > 0)
+        {
+            PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("Closing newest: %s opened %s | Profit: $%.2f",
+                                                 outClosedSymbol, TimeToString(newestTime), profitToClose));
+            
+            CTrade trade;
+            if(trade.PositionClose(ticketToClose))
+            {
+                PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("✅ Closed newest: %s opened %s | P/L: $%.2f", 
+                                                    outClosedSymbol, TimeToString(newestTime), profitToClose));
+                Logger::Log("PositionManager", 
+                           StringFormat("Closed newest position (%s): $%.2f", outClosedSymbol, profitToClose),
+                           false, false);
+                return true;
+            }
+            else
+            {
+                int errorCode = GetLastError();
+                PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("❌ Failed to close: Error %d", errorCode));
+                outClosedSymbol = "";
+                return false;
+            }
+        }
+        
+        outClosedSymbol = "";
+        PositionDebugLog("POSITION-CLOSE-HELPER", "❌ No positions to close");
+        return false;
+    }
+
+    // ==================== TRADE PACKAGE POSITION OPENING ====================
+    
+    bool OpenPositionWithTradePackage(string symbol, bool isBuy, DecisionEngineInterface &package, int magic = 0)
+    {
+        PositionDebugLog("POSITION-PACKAGE", StringFormat("=== OPENING WITH TRADE PACKAGE INTERFACE === | Symbol: %s | Buy: %s | Magic: %d | Conf: %.1f%%",
+                                            symbol, isBuy ? "YES" : "NO", magic, package.overallConfidence));
+        
+        // Extract values from Interface (mapped from TradePackage)
+        string comment = package.signalReason;
+        double riskPercent = 2.0; // Default, can be configured or passed
+        double rrRatio = 1.5;    // Default, can be configured or passed
+        
+        PositionDebugLog("POSITION-PACKAGE", StringFormat("Interface details - Dir: %s | Entry: %.5f | SL: %.5f | TP1: %.5f",
+                                            package.dominantDirection, package.entryPrice, 
+                                            package.stopLoss, package.takeProfit1));
+        
+        PositionDebugLog("POSITION-PACKAGE", StringFormat("Signal - Reason: %s | Confidence: %.1f%% | MTF: B%d/S%d",
+                                            package.signalReason, package.overallConfidence, 
+                                            package.mtfBullishCount, package.mtfBearishCount));
+        
+        // Use default stop method
+        ENUM_STOP_METHOD stopMethod = STOP_ATR;  // Default
+        
+        // If Interface has setup information, use it for more precise entry
+        double entryPrice = 0;
+        double stopLoss = 0;
+        double takeProfit = 0;
+        
+        if(package.entryPrice > 0 && package.stopLoss > 0) {
+            entryPrice = package.entryPrice;
+            stopLoss = package.stopLoss;
+            takeProfit = package.takeProfit1;
+            PositionDebugLog("POSITION-PACKAGE", "✅ Using Interface setup values");
+        } else {
+            PositionDebugLog("POSITION-PACKAGE", "⚠️ Interface setup NOT fully specified - using market prices");
+        }
+        
+        // Check if we should use the signal order type from the Interface
+        ENUM_ORDER_TYPE orderType = isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+        if(package.orderType == ORDER_TYPE_BUY && !isBuy) {
+            PositionDebugLog("POSITION-PACKAGE", "⚠️ Signal conflict: Interface suggests BUY but decision is SELL");
+        } else if(package.orderType == ORDER_TYPE_SELL && isBuy) {
+            PositionDebugLog("POSITION-PACKAGE", "⚠️ Signal conflict: Interface suggests SELL but decision is BUY");
+        }
+        
+        bool result = OpenPosition(
+            symbol, 
+            isBuy, 
+            comment, 
+            magic,                 // Required parameter
+            stopMethod,            // Required parameter
+            riskPercent,           // Required parameter
+            rrRatio,               // Required parameter
+            "TradePackageInterface", // Reason
+            entryPrice,            // Optional: specific entry
+            stopLoss,              // Optional: specific stop loss
+            takeProfit             // Optional: specific take profit
+        );
+        
+        PositionDebugLog("POSITION-PACKAGE", StringFormat("Interface execution result: %s", result ? "✅ SUCCESS" : "❌ FAILED"));
+        
+        if(result) {
+            Logger::Log("PositionManager", 
+                        StringFormat("Interface executed: %s %s (Confidence: %.1f%%, Dir: %s)",
+                                    symbol, isBuy ? "BUY" : "SELL", 
+                                    package.overallConfidence, package.dominantDirection),
+                        true, true);
+        } else {
+            Logger::LogError("PositionManager", 
+                        StringFormat("Failed to execute interface: %s %s (Confidence: %.1f%%)",
+                                    symbol, isBuy ? "BUY" : "SELL", package.overallConfidence));
         }
         
         return result;
     }
-    
-    void LogTradeOpened(string symbol, bool isBuy, double lotSize, double entryPrice,
-                       double stopLoss, double takeProfit, string reason)
-    {
-        // Preserved for backward compatibility
-        PrintFormat("OPENED: New %s position for %s | Lot: %.3f | Entry: %.5f | SL: %.5f | TP: %.5f | Reason: %s",
-            isBuy ? "BUY" : "SELL", symbol, lotSize, entryPrice, stopLoss, takeProfit, reason);
-    }
-    
-    void LogTradeAdded(string symbol, bool isBuy, double lotSize, double entryPrice,
-                      double stopLoss, double takeProfit, string reason)
-    {
-        // Preserved for backward compatibility
-        PrintFormat("ADDED: Additional %s position for %s | Lot: %.3f | Entry: %.5f | SL: %.5f | TP: %.5f | Reason: %s",
-            isBuy ? "BUY" : "SELL", symbol, lotSize, entryPrice, stopLoss, takeProfit, reason);
-    }
-    
-    void LogMessage(string message, string type, string source)
-    {
-        // String optimization
-        string formatted = StringFormat("[%s][%s] %s", type, source, message);
-        Print(formatted);
-    }
-    
-    // ================= HELPER METHODS FOR TRADE TRANSACTIONS =================
-    
-    void UpdateTradeMetrics(const MqlTradeTransaction &trans)
-    {
-        // Update trade metrics based on transaction
-        // Minimal logging
-    }
-    
-    void LogTransaction(const MqlTradeTransaction &trans, const MqlTradeResult &result)
-    {
-        // Minimal logging - only errors
-        if(result.retcode != TRADE_RETCODE_DONE)
-        {
-            PrintFormat("Transaction error: %d - %s", result.retcode, result.comment);
-        }
-    }
-    
-    void HandleNewDeal(const MqlTradeTransaction &trans)
-    {
-        // Minimal logging
-    }
-    
-    void HandleDealUpdate(const MqlTradeTransaction &trans)
-    {
-        // Minimal logging
-    }
-    
-    void HandleDealDelete(const MqlTradeTransaction &trans)
-    {
-        // Minimal logging
-    }
-    
-    void HandleNewOrder(const MqlTradeTransaction &trans)
-    {
-        // Minimal logging
-    }
-    
-    void HandleOrderUpdate(const MqlTradeTransaction &trans)
-    {
-        // Minimal logging
-    }
-    
-    void HandleOrderDelete(const MqlTradeTransaction &trans)
-    {
-        // Minimal logging
-    }
-    
-    void HandlePositionChange(const MqlTradeTransaction &trans)
-    {
-        // Minimal logging
-    }
-    
-    void HandleRequestProcessed(const MqlTradeTransaction &trans,
-                               const MqlTradeRequest& request,
-                               const MqlTradeResult& result)
-    {
-        // Only log failures
-        if(result.retcode != 10009)
-        {
-            PrintFormat("Request failed: Retcode %d - %s", result.retcode, result.comment);
-        }
-    }
-    
-    void UpdatePositionMetrics(ulong ticket)
-    {
-        // Minimal logging
-    }
-    
-    void CheckPositionProfitTarget(ulong ticket)
-    {
-        // Check if position has reached profit target
-        if(PositionSelectByTicket(ticket))
-        {
-            double profit = PositionGetDouble(POSITION_PROFIT);
-            double takeProfit = PositionGetDouble(POSITION_TP);
-            
-            if(takeProfit > 0 && profit > 0)
-            {
-                // Optional: Implement profit target logic
-            }
-        }
-    }
-    
-    // ================================================
-    // IMPLEMENTATION OF HandleHistoryAdd
-    // ================================================
-    void HandleHistoryAdd(const MqlTradeTransaction &trans)
-    {
-        // When a deal is added to history, it usually means a position was closed
-        if(trans.deal > 0)
-        {
-            // Select the deal to get details
-            if(HistoryDealSelect(trans.deal))
-            {
-                long deal_type = HistoryDealGetInteger(trans.deal, DEAL_TYPE);
-                string symbol = HistoryDealGetString(trans.deal, DEAL_SYMBOL);
-                double profit = HistoryDealGetDouble(trans.deal, DEAL_PROFIT);
-                long position_id = HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID);
-                
-                // Check if this is a closing deal (position close)
-                if(deal_type == DEAL_TYPE_BUY || deal_type == DEAL_TYPE_SELL)
-                {
-                    // This is an opening deal (new position)
-                }
-                else if(deal_type == DEAL_TYPE_BUY || deal_type == DEAL_TYPE_SELL)
-                {
-                    // This is a closing deal (position closed)
-                    PrintFormat("Position closed: %I64u, Symbol: %s, Profit: %.2f", 
-                               trans.deal, symbol, profit);
-                    
-                    // Update your position tracking
-                    UpdateClosedPosition(position_id, profit);
-                }
-            }
-        }
-        
-        // Refresh your internal state
-        RefreshPositions();
-    }
-    
-    // ================================================
-    // IMPLEMENTATION OF HandleHistoryUpdate
-    // ================================================
-    void HandleHistoryUpdate(const MqlTradeTransaction &trans)
-    {
-        // Minimal logging for history updates
-    }
-    
-    // ================================================
-    // IMPLEMENTATION OF HandleHistoryDelete
-    // ================================================
-    void HandleHistoryDelete(const MqlTradeTransaction &trans)
-    {
-        // Only log warnings for history deletions
-        PrintFormat("WARNING: HistoryDelete - Order: %I64u, Deal: %I64u", 
-                   trans.order, trans.deal);
-        
-        // Remove from your tracking if you have cached history
-        if(trans.deal > 0)
-        {
-            RemoveDealFromCache(trans.deal);
-        }
-        
-        if(trans.order > 0)
-        {
-            RemoveOrderFromCache(trans.order);
-        }
-        
-        // Force refresh of all history
-        HistorySelect(TimeCurrent() - 86400, TimeCurrent());
-    }
-    
-    // ================================================
-    // IMPLEMENTATION OF ProcessTradeTransaction
-    // ================================================
-    void ProcessTradeTransaction(const MqlTradeTransaction& trans,
-                                const MqlTradeRequest& request,
-                                const MqlTradeResult& result)
-    {
-        // Handle different transaction types for active trades
-        switch(trans.type)
-        {
-            case TRADE_TRANSACTION_ORDER_ADD:
-                // Handle new order
-                HandleNewOrder(trans, request);
-                break;
-                
-            case TRADE_TRANSACTION_ORDER_UPDATE:
-                // Handle order modification
-                HandleOrderUpdate(trans, request);
-                break;
-                
-            case TRADE_TRANSACTION_DEAL_ADD:
-                // Handle executed deal
-                HandleNewDeal(trans, result);
-                break;
-        }
-        
-        // Update positions after any trade transaction
-        RefreshPositions();
-    }
-    
-    // ================================================
-    // HELPER FUNCTIONS (You need to implement these too)
-    // ================================================
-
-    void UpdateClosedPosition(long position_id, double profit)
-    {
-        // Implement: Update your closed positions tracking
-    }
-    
-    void RefreshPositions()
-    {
-        // Implement: Refresh your active positions list
-        // This is typically done using PositionSelect()
-    }
-    
-    void UpdateDealProfit(ulong deal_id, double new_profit)
-    {
-        // Implement: Update profit tracking for a deal
-    }
-    
-    void RemoveDealFromCache(ulong deal_id)
-    {
-        // Implement: Remove deal from your cache
-    }
-    
-    void RemoveOrderFromCache(ulong order_id)
-    {
-        // Implement: Remove order from your cache
-    }
-    
-    void HandleNewOrder(const MqlTradeTransaction& trans, const MqlTradeRequest& request)
-    {
-        // Implement: Handle new order placement
-    }
-    
-    void HandleOrderUpdate(const MqlTradeTransaction& trans, const MqlTradeRequest& request)
-    {
-        // Implement: Handle order modification
-    }
-    
-    void HandleNewDeal(const MqlTradeTransaction& trans, const MqlTradeResult& result)
-    {
-        // Implement: Handle executed deal
-    }
-    
-    // ================= OPTIMIZATION HELPER METHODS =================
-    
-private:
-    // Get cached point value for symbol
-    double GetCachedPoint(string symbol)
-    {
-        if(symbol == "")
-            return 0;
-            
-        int index = GetSymbolIndex(symbol);
-        if(index >= 0 && m_cachedPoint[index] > 0)
-        {
-            return m_cachedPoint[index];
-        }
-        
-        // Cache point value
-        double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-        if(index >= 0)
-        {
-            m_cachedPoint[index] = point;
-        }
-        return point;
-    }
-    
-    // Get index for symbol in cache arrays
-    int GetSymbolIndex(string symbol)
-    {
-        // Simple linear search - optimize if many symbols
-        for(int i = 0; i < ArraySize(m_atrHandles); i++)
-        {
-            // We'll need to store symbol names if we want to map them properly
-            // For now, this is a placeholder
-        }
-        
-        // If not found, add new entry
-        int size = ArraySize(m_atrHandles);
-        ArrayResize(m_atrHandles, size + 1);
-        ArrayResize(m_cachedPoint, size + 1);
-        
-        // Create ATR handle
-        m_atrHandles[size] = iATR(symbol, PERIOD_M15, 14);
-        m_cachedPoint[size] = SymbolInfoDouble(symbol, SYMBOL_POINT);
-        
-        return size;
-    }
-    
-    // ================= GETTERS & SETTERS =================
-    
-    // Getters
-    string GetExpertComment() const { return m_expertComment; }
-    int GetExpertMagic() const { return m_expertMagic; }
-    int GetSlippagePoints() const { return m_slippagePoints; }
-    int GetDailyTradesCount() const { return m_dailyTradesCount; }
-    int GetWeeklyTradesCount() const { return m_weeklyTradesCount; }
-    int GetMonthlyTradesCount() const { return m_monthlyTradesCount; }
-    int GetTotalPositionsOpened() const { return m_totalPositionsOpened; }
-    int GetTotalPositionsClosed() const { return m_totalPositionsClosed; }
-    ResourceManager* GetLogger() const { return m_logger; }
-    RiskManager* GetRiskManager() const { return m_riskManager; }
-    
-    // Setters
-    void SetExpertComment(string comment) { 
-        m_expertComment = comment; 
-    }
-    
-    void SetExpertMagic(int magic) { 
-        m_expertMagic = magic; 
-    }
-    
-    void SetSlippagePoints(int slippage) { 
-        m_slippagePoints = slippage; 
-    }
-    
-    void SetLogger(ResourceManager *pm_logger) { 
-        m_logger = pm_logger; 
-    }
-    
-    void SetRiskManager(RiskManager *pm_riskManager) { 
-        m_riskManager = pm_riskManager; 
-    }
-    
-    // Reset counters
-    void ResetDailyCounter() { 
-        m_dailyTradesCount = 0; 
-    }
-    
-    void ResetAllCounters() { 
-        m_dailyTradesCount = 0;
-        m_weeklyTradesCount = 0;
-        m_monthlyTradesCount = 0;
-        m_totalPositionsOpened = 0;
-        m_totalPositionsClosed = 0;
-    }
-    
-    void IncrementDailyCounter() { 
-        m_dailyTradesCount++; 
-    }
-    
-    // ================= RISK MANAGER INTEGRATION HELPERS =================
-    
-    // Apply trailing stops using RiskManager
-    void ApplyTrailingStops()
-    {
-        if(m_riskManager != NULL)
-        {
-            m_riskManager.UpdateTrailingStops();
-        }
-    }
-    
-    // Secure profits using RiskManager
-    void SecureProfits()
-    {
-        if(m_riskManager != NULL)
-        {
-            int totalPositions = PositionsTotal();
-            for(int i = totalPositions - 1; i >= 0; i--)
-            {
-                ulong ticket = PositionGetTicket(i);
-                if(PositionSelectByTicket(ticket))
-                {
-                    m_riskManager.SecureProfit(ticket);
-                }
-            }
-        }
-    }
-    
-    // Move stop to breakeven using RiskManager
-    bool MoveStopToBreakeven(ulong ticket)
-    {
-        if(m_riskManager != NULL)
-        {
-            return m_riskManager.MoveStopToBreakeven(ticket);
-        }
-        return false;
-    }
-    
-    // Get current risk level from RiskManager
-    string GetCurrentRiskLevel()
-    {
-        if(m_riskManager != NULL)
-        {
-            ENUM_RISK_LEVEL riskLevel = m_riskManager.GetRiskLevel();
-            string riskLevelStr;
-            
-            switch(riskLevel)
-            {
-                case RISK_CRITICAL: riskLevelStr = "CRITICAL"; break;
-                case RISK_HIGH: riskLevelStr = "HIGH"; break;
-                case RISK_MODERATE: riskLevelStr = "MODERATE"; break;
-                case RISK_LOW: riskLevelStr = "LOW"; break;
-                case RISK_OPTIMAL: riskLevelStr = "OPTIMAL"; break;
-                default: riskLevelStr = "UNKNOWN"; break;
-            }
-            
-            return riskLevelStr;
-        }
-        return "UNKNOWN";
-    }
-    
-    // Get daily PnL from RiskManager
-    double GetDailyPnL()
-    {
-        if(m_riskManager != NULL)
-        {
-            // Cache with 5-second TTL
-            static datetime lastPnLCheck = 0;
-            static double cachedPnL = 0;
-            datetime now = TimeCurrent();
-            
-            if(now > lastPnLCheck + 5)
-            {
-                cachedPnL = m_riskManager.GetDailyPnL();
-                lastPnLCheck = now;
-            }
-            
-            return cachedPnL;
-        }
-        return 0.0;
-    }
-    
-    // Print position manager status including RiskManager info
-    void PrintStatus()
-    {
-        // String optimization
-        string status = "\n═══════════════════════════════════════════\n" +
-                       "          POSITION MANAGER STATUS\n" +
-                       "═══════════════════════════════════════════\n" +
-                       StringFormat("Expert: %s | Magic: %d\n", m_expertComment, m_expertMagic) +
-                       StringFormat("Daily Trades: %d\n", m_dailyTradesCount) +
-                       StringFormat("Weekly Trades: %d\n", m_weeklyTradesCount) +
-                       StringFormat("Monthly Trades: %d\n", m_monthlyTradesCount) +
-                       StringFormat("Total Opened: %d | Total Closed: %d\n", 
-                            m_totalPositionsOpened, m_totalPositionsClosed) +
-                       StringFormat("Active Positions: %d\n", PositionsTotal());
-        
-        // Add RiskManager info if available
-        if(m_riskManager != NULL)
-        {
-            status += StringFormat("Risk Level: %s\n", GetCurrentRiskLevel()) +
-                     StringFormat("Daily P&L: $%.2f\n", GetDailyPnL()) +
-                     StringFormat("Current Drawdown: %.1f%%\n", GetCurrentDrawdown());
-        }
-        
-        status += "═══════════════════════════════════════════\n";
-        
-        Print(status);
-    }
-    
-    // Auto flush all symbols at bar close
-    void AutoFlushAllSymbols()
-    {
-        if(m_logger != NULL)
-        {
-            m_logger.AutoFlushAllSymbols();
-        }
-    }
-    
-    // Handle trade transaction for auto logging
-    void HandleTradeTransaction(const MqlTradeTransaction &trans)
-    {
-        if(m_logger != NULL)
-        {
-            m_logger.AutoLogTradeTransaction(trans);
-        }
-    }
-    
-    // Log performance summary for a symbol
-    void LogPerformanceSummary(string symbol)
-    {
-        if(m_logger != NULL)
-        {
-            m_logger.LogPerformanceSummary(symbol);
-        }
-    }
-    
-    // Get performance statistics for a symbol
-    string GetSymbolPerformance(string symbol)
-    {
-        if(m_logger != NULL)
-        {
-            int tradesTaken = m_logger.GetTradesTaken(symbol);
-            int tradesSkipped = m_logger.GetTradesSkipped(symbol);
-            int profitableTrades = m_logger.GetProfitableTrades(symbol);
-            int lostTrades = m_logger.GetLostTrades(symbol);
-            
-            return StringFormat("Trades: %d taken, %d skipped | Win: %d, Loss: %d", 
-                tradesTaken, tradesSkipped, profitableTrades, lostTrades);
-        }
-        return "No logger available";
-    }
-};
-
-// Define static variables (MQL5 requires this outside the class)
-static datetime PositionManager::m_lastStatusLog = 0;
-static int PositionManager::m_tickCounter = 0;
+}
