@@ -9,7 +9,7 @@
 #include "IndicatorManager.mqh"
 
 // ====================== DEBUG SETTINGS ======================
-bool DEBUG_ENABLED_MTF = true;
+bool DEBUG_ENABLED_MTF = false;
 
 // Simple debug function using Logger
 void DebugLogMTF(string context, string message) {

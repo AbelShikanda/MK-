@@ -316,13 +316,13 @@ namespace PositionManager
             // Ensure price is multiple of tick size
             double normalized = NormalizeDouble(MathRound(price / tickSize) * tickSize, digits);
             
-            PositionDebugLog("POSITION-NORMALIZE", StringFormat("Normalized: %.5f -> %.5f (tick: %.5f, digits: %d)", 
+            PositionDebugLog("POSITION-NORMALIZE", StringFormat("Normalized: %.5f . %.5f (tick: %.5f, digits: %d)", 
                                         price, normalized, tickSize, digits));
             return normalized;
         }
         
         double normalized = NormalizeDouble(price, digits);
-        PositionDebugLog("POSITION-NORMALIZE", StringFormat("Normalized: %.5f -> %.5f (digits: %d)", 
+        PositionDebugLog("POSITION-NORMALIZE", StringFormat("Normalized: %.5f . %.5f (digits: %d)", 
                                     price, normalized, digits));
         return normalized;
     }
@@ -366,7 +366,7 @@ namespace PositionManager
     // ==================== POSITION OPERATIONS ====================
     
     bool OpenPosition(string symbol, bool isBuy, string comment = "", int magic = 0, 
-                 ENUM_STOP_METHOD stopMethod = STOP_ATR, double riskPercent = 2.0, 
+                 ENUM_STOP_METHOD stopMethod = STOP_ATR, double riskPercent = 10.0, 
                  double rrRatio = 2.0, string reason = "Signal",
                  double customEntry = 0, double customStopLoss = 0, double customTakeProfit = 0)
     {
@@ -433,13 +433,24 @@ namespace PositionManager
             // Precious metals need much smaller lot sizes
             double maxPreciousMetalLots = 0.5; // Maximum 0.5 lots for precious metals with $5000 account
             
-            // Adjust based on account size
-            if(accountBalance >= 100)
-                maxPreciousMetalLots = 0.01;
-            else if(accountBalance >= 500)
+            if (accountBalance < 200)
+                maxPreciousMetalLots = 0.01; 
+            else if (accountBalance <= 500)
                 maxPreciousMetalLots = 0.05;
-            else if(accountBalance >= 5000)
+            else if (accountBalance <= 1000)
+                maxPreciousMetalLots = 1.0;
+            else if (accountBalance <= 2000)
+                maxPreciousMetalLots = 2.0;
+            else if (accountBalance <= 3000)
+                maxPreciousMetalLots = 3.0;
+            else if (accountBalance <= 4000)
+                maxPreciousMetalLots = 4.0;
+            else if (accountBalance <= 5000)
                 maxPreciousMetalLots = 5.0;
+            else if (accountBalance <= 10000)
+                maxPreciousMetalLots = 10.0;
+            else
+                maxPreciousMetalLots = 50.0; 
             
             if(lotSize > maxPreciousMetalLots)
             {
@@ -1336,7 +1347,7 @@ namespace PositionManager
         
         // Extract values from Interface (mapped from TradePackage)
         string comment = package.signalReason;
-        double riskPercent = 2.0; // Default, can be configured or passed
+        double riskPercent = 10.0; // Default, can be configured or passed
         double rrRatio = 1.5;    // Default, can be configured or passed
         
         PositionDebugLog("POSITION-PACKAGE", StringFormat("Interface details - Dir: %s | Entry: %.5f | SL: %.5f | TP1: %.5f",
@@ -1401,5 +1412,494 @@ namespace PositionManager
         }
         
         return result;
+    }
+
+    // ==================== SMART PROFIT SECURING ====================
+
+    struct ProfitTracker
+    {
+        ulong ticket;
+        double highestPercentSeen;     // Highest % to TP reached
+        double totalClosedPercent;     // Total % of position already closed
+        bool hasSecuredProfit;         // Whether we've secured enough to be "in the clear"
+        bool milestone20Processed;     // Track if 20% milestone was processed
+        bool milestone40Processed;     // Track if 40% milestone was processed
+        bool milestone60Processed;     // Track if 60% milestone was processed
+        bool milestone80Processed;     // Track if 80% milestone was processed
+        // Removed milestone90Processed since we stop at 80%
+    };
+
+    static ProfitTracker trackers[100];
+    static int trackerCount = 0;
+
+    // Dynamic smart profit securing based on % to TP
+    bool SecureSmartProfits()
+    {
+        PositionDebugLog("PROFIT-SMART", "=== DYNAMIC SMART PROFIT SECURING (% to TP) ===");
+        
+        bool closed = false;
+        int positionsActed = 0;
+        
+        for(int i = PositionsTotal() - 1; i >= 0; i--)
+        {
+            ulong ticket = PositionGetTicket(i);
+            if(!PositionSelectByTicket(ticket)) continue;
+            
+            string symbol = PositionGetString(POSITION_SYMBOL);
+            double volume = PositionGetDouble(POSITION_VOLUME);
+            double profit = PositionGetDouble(POSITION_PROFIT);
+            double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+            double tp = PositionGetDouble(POSITION_TP);
+            double sl = PositionGetDouble(POSITION_SL);
+            
+            if(volume < 0.02) continue;
+            
+            // Get or create tracker (using index)
+            int trackerIndex = GetProfitTrackerIndex(ticket);
+            
+            // Calculate % to TP
+            double percentToTP = 0.0;
+            double targetProfit = 100.0; // Default if no TP
+            
+            if(tp > 0)
+            {
+                bool isBuy = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
+                double distance = MathAbs(tp - entry);
+                double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+                double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+                
+                if(tickSize > 0 && tickValue > 0)
+                {
+                    targetProfit = (distance / tickSize) * tickValue * volume;
+                    if(targetProfit > 0)
+                        percentToTP = (profit / targetProfit) * 100.0;
+                }
+            }
+            
+            PositionDebugLog("PROFIT-SMART-CHECK", 
+                StringFormat("%s: Profit=$%.2f | Target=$%.2f | %% to TP=%.1f%% | Highest seen=%.1f%% | Closed=%.1f%% | Secured=%s",
+                symbol, profit, targetProfit, percentToTP, trackers[trackerIndex].highestPercentSeen, 
+                trackers[trackerIndex].totalClosedPercent*100,
+                trackers[trackerIndex].hasSecuredProfit ? "YES" : "NO"));
+            
+            // ==================== SIMPLE CHANGE: START AT 20%, STOP AT 80% ====================
+            // Skip if below 20% to TP (too early to start taking profit)
+            if(percentToTP < 20.0)
+            {
+                PositionDebugLog("PROFIT-SMART-SKIP", 
+                    StringFormat("Skipping: Only %.1f%% to TP (minimum 20%% required)", percentToTP));
+                continue;
+            }
+            
+            // Skip if above 80% to TP (let it ride to TP)
+            if(percentToTP > 80.0)
+            {
+                PositionDebugLog("PROFIT-SMART-RIDE", 
+                    StringFormat("LET IT RIDE: %.1f%% to TP (above 80%% threshold) - No more profit securing", 
+                    percentToTP));
+                continue;
+            }
+            
+            // Skip if % to TP hasn't increased (wait for progress)
+            if(percentToTP <= trackers[trackerIndex].highestPercentSeen)
+            {
+                PositionDebugLog("PROFIT-SMART-SKIP", "Waiting for new progress toward TP");
+                continue;
+            }
+            
+            // Update highest % seen
+            trackers[trackerIndex].highestPercentSeen = percentToTP;
+            
+            // ==================== FIXED MILESTONE STRATEGY ====================
+            // Progressive scaling with milestone triggers - FIXED VERSION
+            double portionToClose = 0.0;
+            bool shouldClose = false;
+
+            // Check which milestones have been achieved but not processed
+            if(percentToTP >= 80.0 && !trackers[trackerIndex].milestone80Processed)
+            {
+                shouldClose = true;
+                trackers[trackerIndex].milestone80Processed = true;
+                portionToClose = 0.80;  // Changed from 0.85 to 0.95 - Close 95% total by 80% to TP (almost all)
+                PositionDebugLog("PROFIT-SMART-TRIGGER", "🎯 MILESTONE 80% → Close remaining to reach 95% total");
+            }
+            else if(percentToTP >= 60.0 && !trackers[trackerIndex].milestone60Processed)
+            {
+                shouldClose = true;
+                trackers[trackerIndex].milestone60Processed = true;
+                portionToClose = 0.60;  // Changed from 0.60 to 0.80 - Close 80% total by 60% to TP
+                PositionDebugLog("PROFIT-SMART-TRIGGER", "🎯 MILESTONE 60% → Close to reach 80% total");
+            }
+            else if(percentToTP >= 40.0 && !trackers[trackerIndex].milestone40Processed)
+            {
+                shouldClose = true;
+                trackers[trackerIndex].milestone40Processed = true;
+                portionToClose = 0.40;  // Changed from 0.40 to 0.60 - Close 60% total by 40% to TP
+                PositionDebugLog("PROFIT-SMART-TRIGGER", "🎯 MILESTONE 40% → Close to reach 60% total");
+            }
+            else if(percentToTP >= 20.0 && !trackers[trackerIndex].milestone20Processed)
+            {
+                shouldClose = true;
+                trackers[trackerIndex].milestone20Processed = true;
+                portionToClose = 0.20;  // Changed from 0.20 to 0.40 - Close 40% total by 20% to TP
+                PositionDebugLog("PROFIT-SMART-TRIGGER", "🎯 MILESTONE 20% → Close to reach 40% total");
+            }
+            
+            // Optional bonus: Allow small closes between milestones if profit is substantial
+            if(!shouldClose && percentToTP > 50.0 && profit > 0)
+            {
+                // Calculate position risk for bonus logic
+                double positionRisk = 0;
+                if(sl > 0)
+                {
+                    bool isBuy = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
+                    double slDistance = MathAbs(entry - sl);
+                    double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+                    double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+                    
+                    if(tickSize > 0 && tickValue > 0)
+                        positionRisk = (slDistance / tickSize) * tickValue * volume;
+                }
+                
+                // Bonus close if profit > 2x risk (exceptional trade)
+                if(positionRisk > 0 && profit > positionRisk * 2.0)
+                {
+                    shouldClose = true;
+                    portionToClose = 0.10; // Small 10% bonus close
+                    PositionDebugLog("PROFIT-SMART-BONUS", 
+                        StringFormat("💎 BONUS CLOSE: %.1f%% to TP with %.1fx risk reward → Close 10%%",
+                        percentToTP, profit/positionRisk));
+                }
+            }
+            
+            if(!shouldClose)
+            {
+                PositionDebugLog("PROFIT-SMART-SKIP", 
+                    StringFormat("No new milestone (current: %.1f%%, milestones: 20=%s, 40=%s, 60=%s, 80=%s)", 
+                    percentToTP,
+                    trackers[trackerIndex].milestone20Processed ? "YES" : "NO",
+                    trackers[trackerIndex].milestone40Processed ? "YES" : "NO",
+                    trackers[trackerIndex].milestone60Processed ? "YES" : "NO",
+                    trackers[trackerIndex].milestone80Processed ? "YES" : "NO"));
+                continue;
+            }
+            
+            // Smart adjustment: If we're "in the clear", be more aggressive
+            if(trackers[trackerIndex].hasSecuredProfit && portionToClose < 0.5)
+            {
+                portionToClose = MathMax(portionToClose, 0.5); // Minimum 50% close when in the clear
+                PositionDebugLog("PROFIT-SMART-ADVANTAGE", 
+                    "✅ IN THE CLEAR → Increasing close size to 50% minimum");
+            }
+            
+            // Ensure portion is valid (20-95% range)
+            portionToClose = MathMax(0.20, MathMin(0.95, portionToClose));
+            
+            // Calculate how much ADDITIONAL to close (not total)
+            double additionalClose = 0.0;
+            if(portionToClose > trackers[trackerIndex].totalClosedPercent)
+            {
+                additionalClose = portionToClose - trackers[trackerIndex].totalClosedPercent;
+                
+                // Ensure minimum 5% increment (of the position) for small closes
+                double minIncrement = 0.05;  // Minimum 5% of position
+                if(additionalClose < minIncrement && portionToClose < 0.9)
+                {
+                    additionalClose = minIncrement;
+                    PositionDebugLog("PROFIT-SMART-ADJUST", 
+                        StringFormat("Increased to minimum increment: %.1f%% of position", additionalClose*100));
+                }
+            }
+            else
+            {
+                PositionDebugLog("PROFIT-SMART-SKIP", 
+                    StringFormat("Already closed %.1f%% (target: %.1f%%)", 
+                    trackers[trackerIndex].totalClosedPercent*100, portionToClose*100));
+                continue;
+            }
+            
+            // ==================== PROFIT SAFETY CHECK ====================
+            // Check if secured profit covers remaining risk (optional, not required)
+            double positionRisk = 0;
+            if(sl > 0)
+            {
+                bool isBuy = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
+                double slDistance = MathAbs(entry - sl);
+                double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+                double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+                
+                // FIX: Check for division by zero
+                if(tickSize > 0 && tickValue > 0)
+                {
+                    positionRisk = (slDistance / tickSize) * tickValue * volume;
+                    PositionDebugLog("PROFIT-SMART-RISK", 
+                        StringFormat("Risk calculated: $%.2f (distance=%.2f, tickSize=%.5f, tickValue=%.2f)",
+                        positionRisk, slDistance, tickSize, tickValue));
+                }
+                else
+                {
+                    PositionDebugLog("PROFIT-SMART-RISK", StringFormat("Cannot calculate risk: tickSize=%.5f, tickValue=%.2f",
+                        tickSize, tickValue));
+                }
+            }
+            else
+            {
+                PositionDebugLog("PROFIT-SMART-RISK", "No SL set");
+            }
+            
+            // Calculate if this close would put us "in the clear"
+            bool wouldBeInClear = false;
+            if(positionRisk > 0 && additionalClose > 0)
+            {
+                double securedFromThisClose = profit * additionalClose;
+                double remainingAfterClose = volume * (1.0 - (trackers[trackerIndex].totalClosedPercent + additionalClose));
+                
+                // FIX: Avoid division by zero
+                if(volume > 0)
+                {
+                    double remainingRisk = positionRisk * (remainingAfterClose / volume);
+                    wouldBeInClear = (securedFromThisClose >= remainingRisk);
+                    
+                    PositionDebugLog("PROFIT-SMART-SAFETY", 
+                        StringFormat("Risk: $%.2f | This close secures: $%.2f | Remaining risk after: $%.2f | In clear: %s",
+                        positionRisk, securedFromThisClose, remainingRisk, wouldBeInClear ? "YES" : "NO"));
+                }
+                else
+                {
+                    PositionDebugLog("PROFIT-SMART-SAFETY", StringFormat("Cannot evaluate safety: volume=%.3f", volume));
+                }
+            }
+            
+            // ==================== EXECUTION ====================
+            if(additionalClose > 0.01)  // At least 1% to close
+            {
+                double volumeToClose = volume * additionalClose;
+                
+                // Get symbol volume constraints
+                double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+                double maxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+                double lotStep = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+                
+                PositionDebugLog("PROFIT-SMART-VOLUME", 
+                    StringFormat("Volume constraints: Min=%.3f, Max=%.3f, Step=%.3f", 
+                    minLot, maxLot, lotStep));
+                
+                // Normalize volume to step size
+                if(lotStep > 0)
+                {
+                    volumeToClose = NormalizeVolumeStep(volumeToClose, lotStep, minLot, maxLot);
+                    PositionDebugLog("PROFIT-SMART-ADJUST", 
+                        StringFormat("Normalized to valid lot size: %.3f lots", volumeToClose));
+                }
+                
+                // Check minimum lot size
+                if(volumeToClose < minLot)
+                {
+                    PositionDebugLog("PROFIT-SMART-ADJUST", 
+                        StringFormat("Volume %.3f < Min %.3f - adjusting...", volumeToClose, minLot));
+                    
+                    // Try to close at least min lot if possible
+                    if(volume > minLot && profit > 0)
+                    {
+                        volumeToClose = minLot;
+                        
+                        // Recalculate additionalClose based on adjusted volume
+                        additionalClose = volumeToClose / volume;
+                        PositionDebugLog("PROFIT-SMART-ADJUST", 
+                            StringFormat("Adjusted to min lot: %.3f (%.1f%%)", 
+                            volumeToClose, additionalClose*100));
+                    }
+                    else
+                    {
+                        PositionDebugLog("PROFIT-SMART-SKIP", 
+                            StringFormat("Cannot close: volume %.3f < min lot %.3f", 
+                            volumeToClose, minLot));
+                        continue;
+                    }
+                }
+                
+                // Check maximum lot size
+                if(volumeToClose > maxLot && maxLot > 0)
+                {
+                    volumeToClose = maxLot;
+                    additionalClose = volumeToClose / volume;
+                    PositionDebugLog("PROFIT-SMART-ADJUST", 
+                        StringFormat("Adjusted to max lot: %.3f", volumeToClose));
+                }
+                
+                // Ensure we don't close the entire position (leave at least min lot)
+                if(volumeToClose >= volume - minLot && volume > minLot)
+                {
+                    volumeToClose = MathMax(minLot, volume - minLot);
+                    additionalClose = volumeToClose / volume;
+                    PositionDebugLog("PROFIT-SMART-ADJUST", 
+                        StringFormat("Leaving min lot: close %.3f, leave %.3f", 
+                        volumeToClose, volume - volumeToClose));
+                }
+                
+                // Final validation
+                if(volumeToClose <= 0 || volumeToClose >= volume || volumeToClose < minLot)
+                {
+                    PositionDebugLog("PROFIT-SMART-ERROR", 
+                        StringFormat("Invalid volume: %.3f (min=%.3f, total=%.3f)", 
+                        volumeToClose, minLot, volume));
+                    continue;
+                }
+                
+                PositionDebugLog("PROFIT-SMART-ACTION", 
+                    StringFormat("Executing: Close %.3f lots (%.1f%% additional, %.1f%% total) of %s at milestone %.1f%% to TP",
+                    volumeToClose, additionalClose*100, 
+                    (trackers[trackerIndex].totalClosedPercent + additionalClose)*100, symbol, percentToTP));
+                
+                CTrade trade;
+                if(trade.PositionClosePartial(ticket, volumeToClose))
+                {
+                    closed = true;
+                    positionsActed++;
+                    
+                    // Update tracker
+                    trackers[trackerIndex].totalClosedPercent += additionalClose;
+                    
+                    // Update "in the clear" status
+                    if(!trackers[trackerIndex].hasSecuredProfit && wouldBeInClear)
+                    {
+                        trackers[trackerIndex].hasSecuredProfit = true;
+                        PositionDebugLog("PROFIT-SMART-CLEAR", 
+                            "✅ NOW IN THE CLEAR! Secured profit covers remaining risk");
+                    }
+                    
+                    PositionDebugLog("PROFIT-SMART-SUCCESS", 
+                        StringFormat("✅ Closed: %.3f lots | Total closed: %.1f%% | Status: %s",
+                        volumeToClose, trackers[trackerIndex].totalClosedPercent*100,
+                        trackers[trackerIndex].hasSecuredProfit ? "IN THE CLEAR" : "SEEKING PROFITS"));
+                    
+                    // Check if this was the last close (leaving min lot)
+                    double remainingVolume = volume - volumeToClose;
+                    if(remainingVolume <= minLot * 1.1)  // Within 10% of min lot
+                    {
+                        PositionDebugLog("PROFIT-SMART-LAST", 
+                            "🎯 LAST PORTION CLOSED - Letting remaining trade ride to the end");
+                        
+                        // Set TP for remaining position to original TP
+                        if(tp > 0)
+                        {
+                            trade.PositionModify(ticket, sl, tp);
+                            PositionDebugLog("PROFIT-SMART-FINAL", 
+                                StringFormat("Set TP for remaining %.3f lots at %.5f", 
+                                remainingVolume, tp));
+                        }
+                    }
+                }
+                else
+                {
+                    int error = GetLastError();
+                    string errorDesc = TradeErrorDescription(error);
+                    PositionDebugLog("PROFIT-SMART-ERROR", 
+                        StringFormat("Close failed: %d - %s", error, errorDesc));
+                }
+            }
+            else
+            {
+                PositionDebugLog("PROFIT-SMART-SKIP", "No additional closing needed at current progress");
+            }
+            
+            // Log current status
+            PositionDebugLog("PROFIT-SMART-STATUS", 
+                StringFormat("Current: %s (%.1f%% to TP, %.1f%% closed)",
+                trackers[trackerIndex].hasSecuredProfit ? "✅ IN THE CLEAR" : "⚠️ SEEKING PROFITS",
+                percentToTP, trackers[trackerIndex].totalClosedPercent*100));
+        }
+        
+        // Clean up closed positions
+        CleanupProfitTrackers();
+        
+        PositionDebugLog("PROFIT-SMART-SUMMARY", 
+            StringFormat("Acted on %d positions | Any closes: %s", 
+            positionsActed, closed ? "YES" : "NO"));
+        PositionDebugLog("PROFIT-SMART", "=== COMPLETE ===");
+        
+        return closed;
+    }
+
+    // Helper function to get tracker index
+    int GetProfitTrackerIndex(ulong ticket)
+    {
+        // Look for existing tracker
+        for(int i = 0; i < trackerCount; i++)
+        {
+            if(trackers[i].ticket == ticket)
+                return i;
+        }
+        
+        // Create new tracker if space available
+        if(trackerCount < ArraySize(trackers))
+        {
+            trackers[trackerCount].ticket = ticket;
+            trackers[trackerCount].highestPercentSeen = 0;
+            trackers[trackerCount].totalClosedPercent = 0;
+            trackers[trackerCount].hasSecuredProfit = false;
+            trackers[trackerCount].milestone20Processed = false;
+            trackers[trackerCount].milestone40Processed = false;
+            trackers[trackerCount].milestone60Processed = false;
+            trackers[trackerCount].milestone80Processed = false;
+            return trackerCount++;
+        }
+        
+        // If array is full, use the last slot
+        return trackerCount - 1;
+    }
+
+    // Volume normalization function
+    double NormalizeVolumeStep(double volume, double step, double minLot, double maxLot)
+    {
+        if(step <= 0) return volume;
+        
+        // Normalize to step size
+        double normalized = MathRound(volume / step) * step;
+        
+        // Ensure within min/max bounds
+        normalized = MathMax(minLot, MathMin(maxLot > 0 ? maxLot : volume, normalized));
+        
+        return normalized;
+    }
+
+    // Error description helper
+    string TradeErrorDescription(int error)
+    {
+        switch(error)
+        {
+            case 4756: return "Invalid volume";
+            case 4757: return "Invalid price";
+            case 4758: return "Invalid stops";
+            case 4759: return "Invalid trade volume";
+            case 4760: return "Invalid trade expiration";
+            case 4761: return "Invalid trade type";
+            case 4762: return "Not enough money";
+            case 4763: return "Price changed";
+            case 4764: return "Off quotes";
+            case 4765: return "Broker busy";
+            case 4766: return "Requote";
+            case 4767: return "Order locked";
+            case 4768: return "Long positions only allowed";
+            case 4769: return "Too many requests";
+            default: return "Unknown error: " + IntegerToString(error);
+        }
+    }
+
+    void CleanupProfitTrackers()
+    {
+        for(int i = trackerCount - 1; i >= 0; i--)
+        {
+            if(!PositionSelectByTicket(trackers[i].ticket))
+            {
+                PositionDebugLog("PROFIT-SMART-CLEANUP", 
+                    StringFormat("Removing tracker for closed position %d", trackers[i].ticket));
+                
+                // Shift array to remove closed position
+                for(int j = i; j < trackerCount - 1; j++)
+                    trackers[j] = trackers[j + 1];
+                trackerCount--;
+            }
+        }
     }
 }

@@ -11,7 +11,7 @@
 #include "../Data/IndicatorManager.mqh"
 
 // ==================== DEBUG SETTINGS ====================
-bool RISK_DEBUG_ENABLED = true;
+bool RISK_DEBUG_ENABLED = false;
 
 // Simple debug function using Logger
 void RiskDebugLog(string context, string message) {
@@ -214,7 +214,7 @@ namespace RiskCalculator {
     
     // ==================== POSITION SIZE CALCULATION ====================
     double CalculatePositionSize(string symbol, double entryPrice, double stopLoss, 
-                                double riskPercent = 2.0) {
+                                double riskPercent = 5.0) {
         RiskDebugLog("RISK-SIZE", StringFormat("=== CALCULATING POSITION SIZE === | Symbol: %s | Entry: %.5f | SL: %.5f | Risk: %.1f%%",
                               symbol, entryPrice, stopLoss, riskPercent));
         

@@ -30,7 +30,7 @@ Core Principles:
 // ================= FORWARD DECLARATIONS =================
 
 // ====================== DEBUG SETTINGS ======================
-bool DEBUG_ENABLED = true;
+bool DEBUG_ENABLED = false;
 
 // Simple debug function using Logger
 void DebugLogFile(string context, string message) {
@@ -72,13 +72,13 @@ struct DecisionParams {
     double minRiskRewardRatio;
     
     DecisionParams() {
-        buyConfidenceThreshold = 60.0;
-        sellConfidenceThreshold = 60.0;
+        buyConfidenceThreshold = 70.0;
+        sellConfidenceThreshold = 90.0;
         closePositionThreshold = 30.0;
         closeAllThreshold = 20.0;
         cooldownMinutes = 60;
         maxPositionsPerSymbol = 3;
-        riskPercent = 2.0;
+        riskPercent = 10.0;
         minRiskRewardRatio = 1.5;
     }
     
@@ -450,7 +450,7 @@ public:
     bool RegisterSymbolWithDefaults(string symbol,
                                    double buyThreshold = 60.0,
                                    double sellThreshold = 60.0,
-                                   double riskPercent = 2.0) {
+                                   double riskPercent = 5.0) {
         DebugLogFile("REGISTER_SYMBOL_DEFAULTS", StringFormat("Registering %s with defaults: Buy=%.1f%%, Sell=%.1f%%, Risk=%.1f%%",
             symbol, buyThreshold, sellThreshold, riskPercent));
         

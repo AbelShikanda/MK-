@@ -11,7 +11,7 @@
 #include "IndicatorManager.mqh"
 
 // Debug settings
-bool VOLUME_DEBUG_ENABLED = true;
+bool VOLUME_DEBUG_ENABLED = false;
 
 // Volume analysis result structure
 struct VolumeAnalysisResult

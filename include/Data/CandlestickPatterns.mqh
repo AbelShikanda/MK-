@@ -7,7 +7,7 @@
 
 // Note: Using ONLY static utility functions as specified
 // All utils are static files with static functions only, no classes
-#include "../Utils/Logger.mqh"      // Using Logger::Log(), Logger::LogError(), etc.
+// #include "../Utils/Logger.mqh"      // Using Logger::Log(), Logger::LogError(), etc.
 #include "../Utils/MathUtils.mqh"   // Using MathUtils::CalculateATR(), MathUtils::CalculatePositionSizeByRisk(), etc.
 #include "../Utils/ErrorHandler.mqh"  // Using ErrorHandler::GetLastError(), ErrorHandler::HandleErrorWithRetry(), etc.
 #include "../Utils/TimeUtils.mqh"   // Using TimeUtils::IsNewBar(), TimeUtils::TimeframeToMinutes(), etc.
@@ -630,7 +630,7 @@ public:
     
     bool Initialize(string symbol = NULL, ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
         if(m_initialized) {
-            Logger::Log("CandlePatterns", "Already initialized", false, true);
+            // Logger::Log("CandlePatterns", "Already initialized", false, true);
             return false;
         }
         
@@ -641,13 +641,13 @@ public:
         double testClose = iClose(m_symbol, m_timeframe, 0);
         if(testClose <= 0) {
             int errorCode = ErrorHandler::GetLastError();
-            Logger::LogError("CandlePatterns", "Failed to retrieve candle data", errorCode);
+            // Logger::LogError("CandlePatterns", "Failed to retrieve candle data", errorCode);
             return false;
         }
         
         m_initialized = true;
-        Logger::Log("CandlePatterns", "Initialized for " + m_symbol + " on timeframe " + 
-                IntegerToString(TimeUtils::TimeframeToMinutes(m_timeframe)) + " minutes");
+        // Logger::Log("CandlePatterns", "Initialized for " + m_symbol + " on timeframe " + 
+                // IntegerToString(TimeUtils::TimeframeToMinutes(m_timeframe)) + " minutes");
         return true;
     }
     
@@ -662,8 +662,8 @@ public:
             if(candles[i].close <= 0) {
                 int errorCode = ErrorHandler::GetLastError();
                 if(errorCode != 0) {
-                    Logger::LogError("CandlePatterns", "Failed to get candle data at shift " + 
-                                   IntegerToString(shift + i), errorCode);
+                    // Logger::LogError("CandlePatterns", "Failed to get candle data at shift " + 
+                                   // IntegerToString(shift + i), errorCode);
                 }
                 return bestResult;
             }
@@ -690,7 +690,7 @@ public:
             if(bestResult.IsActionable()) {
                 string logMsg = StringFormat("Actionable pattern: %s (%.1f%% | RR:%.1f)", 
                     bestResult.description, bestResult.confidence, bestResult.riskRewardRatio);
-                Logger::Log("CandlePatterns", logMsg, true, true);
+                // Logger::Log("CandlePatterns", logMsg, true, true);
             }
         }
         

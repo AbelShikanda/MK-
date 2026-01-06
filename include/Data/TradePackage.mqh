@@ -13,7 +13,7 @@
 struct POIModuleSignal;
 
 // ====================== DEBUG SETTINGS ======================
-bool DEBUG_ENABLED_TP = true;
+bool DEBUG_ENABLED_TP = false;
 
 void DebugLogTP(string context, string message) {
    if(DEBUG_ENABLED_TP) {
@@ -366,7 +366,7 @@ struct RiskManagement {
    double accountRisk;
    
    RiskManagement() {
-      maxRiskPercent = 2.0;
+      maxRiskPercent = 10.0;
       minRiskReward = 1.5;
       maxPositionSize = 10.0;
       useDynamicSizing = true;
@@ -454,12 +454,12 @@ public:
       DebugLogTP("TradePackage", "Constructor called");
       
       // Initialize weights for 6 components (default balanced weights)
-      weights.mtfWeight = 25.0;
+      weights.mtfWeight = 35.0;
       weights.volumeWeight = 15.0;
-      weights.rsiWeight = 15.0;
-      weights.macdWeight = 15.0;
+      weights.rsiWeight = 18.0;
+      weights.macdWeight = 12.0;
       weights.patternWeight = 10.0;
-      weights.poiWeight = 20.0;  // POI weight
+      weights.poiWeight = 10.0;  // POI weight
       
       // Initialize aggregated results
       overallConfidence = 0;

@@ -21,7 +21,7 @@
 
 
 // ====================== DEBUG SETTINGS ======================
-bool DEBUG_ENABLED_PM = true;
+bool DEBUG_ENABLED_PM = false;
 
 void DebugLogPM(string context, string message) {
    if(DEBUG_ENABLED_PM) {
