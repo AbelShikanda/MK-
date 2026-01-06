@@ -30,7 +30,7 @@ Core Principles:
 // ================= FORWARD DECLARATIONS =================
 
 // ====================== DEBUG SETTINGS ======================
-bool DEBUG_ENABLED = false;
+bool DEBUG_ENABLED = true;
 
 // Simple debug function using Logger
 void DebugLogFile(string context, string message) {
