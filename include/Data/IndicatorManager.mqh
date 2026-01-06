@@ -9,7 +9,7 @@
 // #include "../Data/tradepackage.mqh"
 
 // Debug configuration
-bool DEBUG_INDICATOR_ENABLED = false;
+bool DEBUG_INDICATOR_ENABLED = true;
 
 // Simple debug function using Logger
 void DebugLogIndicator(string context, string message) {

@@ -10,7 +10,7 @@
 #include "IndicatorManager.mqh"
 
 // ==================== DEBUG SETTINGS ====================
-bool DEBUG_SIMPLE_RSI = false;
+bool DEBUG_SIMPLE_RSI = true;
 
 // Simple debug function using Logger
 void DebugLogSimpleRSI(string context, string message) {

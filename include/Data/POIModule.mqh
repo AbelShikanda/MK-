@@ -10,7 +10,7 @@
 #include "../Data/IndicatorManager.mqh"
 
 // ==================== DEBUG SETTINGS ====================
-bool POI_DEBUG_ENABLED = false;
+bool POI_DEBUG_ENABLED = true;
 
 void DebugLogPOI(string context, string message) {
    if(POI_DEBUG_ENABLED) {

@@ -11,7 +11,7 @@
 #include "../Data/IndicatorManager.mqh"
 
 // ==================== DEBUG SETTINGS ====================
-bool RISK_DEBUG_ENABLED = false;
+bool RISK_DEBUG_ENABLED = true;
 
 // Simple debug function using Logger
 void RiskDebugLog(string context, string message) {

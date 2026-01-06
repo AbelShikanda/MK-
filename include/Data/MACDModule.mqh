@@ -12,7 +12,7 @@
 #include "../Utils/TimeUtils.mqh"
 
 // ==================== DEBUG SETTINGS ====================
-bool MACD_DEBUG_ENABLED = false;
+bool MACD_DEBUG_ENABLED = true;
 
 // Debug function using integrated Logger
 void DebugLogMACD(string context, string message) {

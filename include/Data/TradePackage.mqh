@@ -13,7 +13,7 @@
 struct POIModuleSignal;
 
 // ====================== DEBUG SETTINGS ======================
-bool DEBUG_ENABLED_TP = false;
+bool DEBUG_ENABLED_TP = true;
 
 void DebugLogTP(string context, string message) {
    if(DEBUG_ENABLED_TP) {
