@@ -817,7 +817,7 @@ namespace PositionManager
 
     double CalculateStructuralTrailingStop(string symbol, bool isBuy, double entryPrice, 
                                         double currentPrice, double currentSL,
-                                        ENUM_TIMEFRAMES structureTF = PERIOD_H1)
+                                        ENUM_TIMEFRAMES structureTF = PERIOD_M15)
     {
         // Find swing point based on market structure
         double swingPoint = 0;
@@ -877,7 +877,7 @@ namespace PositionManager
 
     // ==================== TRAILING STOP MANAGER FUNCTION ====================
 
-    void UpdateTrailingStops(int magicNumber = 0, double minProfit = 10.0, ENUM_TIMEFRAMES tf = PERIOD_H1)
+    void UpdateTrailingStops(int magicNumber = 0, double minProfit = 10.0, ENUM_TIMEFRAMES tf = PERIOD_M15)
     {
         int updated = 0;
         

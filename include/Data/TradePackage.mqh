@@ -454,12 +454,12 @@ public:
       DebugLogTP("TradePackage", "Constructor called");
       
       // Initialize weights for 6 components (default balanced weights)
-      weights.mtfWeight = 35.0;
-      weights.volumeWeight = 15.0;
-      weights.rsiWeight = 18.0;
-      weights.macdWeight = 12.0;
-      weights.patternWeight = 10.0;
-      weights.poiWeight = 10.0;  // POI weight
+      weights.mtfWeight = 31.0;
+      weights.volumeWeight = 20.0;
+      weights.rsiWeight = 11.0;
+      weights.macdWeight = 11.0;
+      weights.patternWeight = 11.0;
+      weights.poiWeight = 16.0;  // POI weight
       
       // Initialize aggregated results
       overallConfidence = 0;

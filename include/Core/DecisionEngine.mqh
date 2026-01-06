@@ -164,10 +164,15 @@ struct SymbolState {
     }
     
     bool HasValidPackage() {
-        bool isValid = (lastPackage.IsValid() && lastPackage.analysisTime > 0);
+        // bool isValid = (lastPackage.IsValid() && lastPackage.analysisTime > 0);
+        // if(!isValid) {
+        //     DebugLogFile("PACKAGE_CHECK", StringFormat("No valid interface for %s: isValid=%s, analysisTime=%s",
+        //         symbol, lastPackage.IsValid() ? "true" : "false", TimeToString(lastPackage.analysisTime)));
+        // }
+        bool isValid = (lastPackage.analysisTime > 0);
         if(!isValid) {
-            DebugLogFile("PACKAGE_CHECK", StringFormat("No valid interface for %s: isValid=%s, analysisTime=%s",
-                symbol, lastPackage.IsValid() ? "true" : "false", TimeToString(lastPackage.analysisTime)));
+            DebugLogFile("PACKAGE_CHECK", StringFormat("No valid interface for %s: analysisTime=%s",
+                symbol, TimeToString(lastPackage.analysisTime)));
         }
         return isValid;
     }

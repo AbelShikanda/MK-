@@ -108,7 +108,7 @@ private:
             updateOnNewBar = true;
             
             // Validation thresholds
-            minOverallConfidence = 65.0;
+            minOverallConfidence = 20.0;
             minComponentScore = 50.0;
             minComponentsRequired = 3;  // Need at least 3 of 6 components
             
