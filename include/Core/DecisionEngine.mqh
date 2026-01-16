@@ -105,19 +105,19 @@ struct DecisionParams
     double trendSellThreshold;
     double trapProbabilityThreshold;
 
-    DecisionParams(double buyThresh = 70.0,
-                   double sellThresh = 85.0,
+    DecisionParams(double buyThresh = 60.0,
+                   double sellThresh = 60.0,
                    double closeThresh = 40.0,
                    double closeAllThresh = 40.0,
-                   int cooldownMins = 60,
-                   int maxPositions = 1,
+                   int cooldownMins = 30,
+                   int maxPositions = 2,
                    double riskPct = 20.0,
-                   double minRR = 1.5,
-                   double rangeBuy = 75.0,
-                   double rangeSell = 75.0,
-                   double trendBuy = 65.0,
-                   double trendSell = 70.0,
-                   double trapProb = 65.0)
+                   double minRR = 1.0,
+                   double rangeBuy = 60.0,
+                   double rangeSell = 60.0,
+                   double trendBuy = 60.0,
+                   double trendSell = 60.0,
+                   double trapProb = 60.0)
     {
         buyConfidenceThreshold = buyThresh;
         sellConfidenceThreshold = sellThresh;
@@ -241,9 +241,16 @@ struct SymbolState
     DECISION_ACTION lastDecision;
     datetime lastDecisionTime;
     int magicNumber;
-    TrapAnalysisResult lastTrapResult;
+    RangeAnalysisResult lastRangeResult;
     bool usingRangePackage;
     string lastProcessorUsed;
+
+    // POSITION TRACKING FIELDS:
+    datetime positionOpenTime;
+    datetime positionCloseTime;
+    DECISION_ACTION positionOpenDecision;
+    double positionOpenConfidence;
+    bool awaitingProfitabilityCheck;
 
     SymbolState()
     {
@@ -253,6 +260,13 @@ struct SymbolState
         magicNumber = 0;
         usingRangePackage = false;
         lastProcessorUsed = "NONE";
+
+        // Initialize position tracking fields
+        positionOpenTime = 0;
+        positionCloseTime = 0;
+        positionOpenDecision = ACTION_NONE;
+        positionOpenConfidence = 0;
+        awaitingProfitabilityCheck = false;
     }
 
     bool HasValidPackage()
@@ -363,14 +377,32 @@ struct DecisionMetrics
 
     void Update(DECISION_ACTION decision, double confidence, bool wasProfitable = false, string processorType = "")
     {
+        // Only count OPEN decisions, not CLOSE decisions
+        bool isOpenDecision = (decision == ACTION_OPEN_BUY || decision == ACTION_OPEN_SELL);
+
+        if (!isOpenDecision)
+        {
+            DebugLogFile("METRICS_SKIP",
+                         StringFormat("Skipping non-open decision in metrics: %s (Conf: %.1f%%)",
+                                      DecisionToStringStatic(decision), confidence));
+            return;
+        }
+
         int prevTotal = totalDecisions;
         totalDecisions++;
 
         if (wasProfitable)
         {
             profitableDecisions++;
-            DebugLogFile("METRICS_UPDATE", StringFormat("Profitable decision: %s, Confidence: %.1f%%, Processor: %s",
-                                                        DecisionToStringStatic(decision), confidence, processorType));
+            DebugLogFile("METRICS_PROFITABLE",
+                         StringFormat("✅ Profitable trade: %s | Conf: %.1f%% | Processor: %s",
+                                      DecisionToStringStatic(decision), confidence, processorType));
+        }
+        else
+        {
+            DebugLogFile("METRICS_UNPROFITABLE",
+                         StringFormat("❌ Unprofitable trade: %s | Conf: %.1f%% | Processor: %s",
+                                      DecisionToStringStatic(decision), confidence, processorType));
         }
 
         // Track processor usage
@@ -395,17 +427,33 @@ struct DecisionMetrics
         if (totalDecisions > 0)
         {
             accuracyRate = ((double)profitableDecisions / totalDecisions) * 100.0;
-        }
 
-        DebugLogFile("METRICS_UPDATE", StringFormat("Decision: %s, Confidence: %.1f%%, Total: %d, Profitable: %d, Accuracy: %.1f%%, AvgConf: %.1f%%, Processor: %s",
-                                                    DecisionToStringStatic(decision), confidence, totalDecisions, profitableDecisions, accuracyRate, averageConfidence, processorType));
+            DebugLogFile("METRICS_STATS",
+                         StringFormat("Updated stats: Trades: %d | Profitable: %d | Accuracy: %.1f%% | AvgConf: %.1f%%",
+                                      totalDecisions, profitableDecisions, accuracyRate, averageConfidence));
+        }
     }
 
+    // ✅ CORRECTED - KEEP THIS ONE (REMOVE THE OTHER ONE)
     string ToString() const
     {
-        return StringFormat("Decisions: %d | Accuracy: %.1f%% | Avg Conf: %.1f%% | Running: %d hours",
-                            totalDecisions, accuracyRate, averageConfidence,
-                            (int)((TimeCurrent() - startTime) / 3600));
+        // Calculate accuracy based on ONLY OPEN decisions that have closed
+        double accuracy = 0;
+        if (totalDecisions > 0)
+        {
+            accuracy = ((double)profitableDecisions / totalDecisions) * 100.0;
+        }
+
+        int losses = totalDecisions - profitableDecisions;
+        int runningHours = (int)((TimeCurrent() - startTime) / 3600);
+
+        return StringFormat("Trades: %d | W:%d L:%d | Acc: %.1f%% | AvgConf: %.1f%% | Running: %dh",
+                            totalDecisions,
+                            profitableDecisions,
+                            losses,
+                            accuracy,
+                            averageConfidence,
+                            runningHours);
     }
 
     string GetProcessorStats() const
@@ -649,10 +697,16 @@ public:
             DebugLogFile("ARRAY_RESIZE", StringFormat("Resized symbol states array to %d", newSize));
         }
 
+        // Get market regime for this symbol
+        MarketAnalysis regime = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
+
+        // Apply regime adaptation
+        DecisionParams adaptedParams = CreateRegimeBasedParams(regime, params);
+
         // Initialize symbol state
         SymbolState state;
         state.symbol = symbol;
-        state.params = params;
+        state.params = adaptedParams;
 
         // Generate unique magic number
         state.magicNumber = GenerateMagicNumber(symbol);
@@ -671,25 +725,35 @@ public:
         return true;
     }
 
-    // Factory function for mk$ EA parameters
+    // Factory function for mk$ EA parameters - APPLIES MK$ PROFILE
     static DecisionParams CreateMKParams(double maxRiskPerTrade = 20.0,
                                          int positionCooldownMinutes = 60)
     {
-        return DecisionParams(
-            70.0,                    // buyConfidenceThreshold
-            85.0,                    // sellConfidenceThreshold
-            40.0,                    // closePositionThreshold
-            40.0,                    // closeAllThreshold
-            positionCooldownMinutes, // cooldownMinutes
-            1,                       // maxPositionsPerSymbol
-            maxRiskPerTrade,         // riskPercent
-            1.5,                     // minRiskRewardRatio
-            75.0,                    // rangeBuyThreshold
-            75.0,                    // rangeSellThreshold
-            65.0,                    // trendBuyThreshold
-            70.0,                    // trendSellThreshold
-            65.0                     // trapProbabilityThreshold
-        );
+        // Start with minimal defaults
+        DecisionParams params;
+
+        // OVERRIDE with mk$ specific settings
+        params.buyConfidenceThreshold = 60.0;  // mk$ needs higher confidence
+        params.sellConfidenceThreshold = 60.0; // Even higher for sells
+        params.closePositionThreshold = 40.0;
+        params.closeAllThreshold = 40.0;
+        params.cooldownMinutes = positionCooldownMinutes;
+        params.maxPositionsPerSymbol = 2; // mk$ only trades 1 position
+        params.riskPercent = maxRiskPerTrade;
+        params.minRiskRewardRatio = 1.0;
+
+        // Regime-specific thresholds for mk$
+        params.rangeBuyThreshold = 60.0; // Higher for range trading
+        params.rangeSellThreshold = 60.0;
+        params.trendBuyThreshold = 60.0; // Lower for trend following
+        params.trendSellThreshold = 60.0;
+        params.trapProbabilityThreshold = 60.0; // mk$ avoids traps
+
+        DebugLogFile("MK_PARAMS_CREATED",
+                     StringFormat("Created mk$ params: Risk=%.1f%%, Cooldown=%dm",
+                                  maxRiskPerTrade, positionCooldownMinutes));
+
+        return params;
     }
 
     bool SetupForMKEA(string symbol,
@@ -702,11 +766,17 @@ public:
         if (!Initialize("mk$", magicBase, useAutoExecution))
             return false;
 
-        // Create params using factory function - clean and clear!
-        DecisionParams params = CreateMKParams(maxRiskPerTrade, positionCooldownMinutes);
+        // 1. Create mk$ profile
+        DecisionParams mkParams = CreateMKParams(maxRiskPerTrade, positionCooldownMinutes);
 
-        // Register symbol
-        return RegisterSymbol(symbol, params);
+        // 2. Get current market regime
+        MarketAnalysis regime = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
+
+        // 3. Adapt mk$ profile to current regime
+        DecisionParams finalParams = CreateRegimeBasedParams(regime, mkParams);
+
+        // 4. Register with adapted parameters
+        return RegisterSymbol(symbol, finalParams);
     }
 
     bool RegisterSymbolWithDefaults(string symbol,
@@ -872,8 +942,26 @@ public:
         {
             DebugLogFile("AUTO_REGISTRATION", StringFormat("Symbol %s not registered - auto-registering with regime-based defaults", symbol));
 
-            // Use regime-based defaults
-            DecisionParams params = CreateRegimeBasedParams(regimeAnalysis);
+            // ============ FIX HERE ============
+            // OLD (line 51):
+            // DecisionParams params = CreateRegimeBasedParams(regimeAnalysis);
+
+            // NEW: Create minimal safe defaults first, then adapt to regime
+            DecisionParams minimalParams; // Uses 50% thresholds, 5% risk (safe defaults)
+            DebugLogFile("AUTO_REG_CREATE_BASE", StringFormat("Created minimal base params: Buy=%.1f%%, Sell=%.1f%%, Risk=%.1f%%",
+                                                              minimalParams.buyConfidenceThreshold,
+                                                              minimalParams.sellConfidenceThreshold,
+                                                              minimalParams.riskPercent));
+
+            // Now adapt to current market regime
+            DecisionParams params = CreateRegimeBasedParams(regimeAnalysis, minimalParams);
+            DebugLogFile("AUTO_REG_ADAPTED", StringFormat("Adapted params for %s regime: Buy=%.1f%%, Sell=%.1f%%, Cooldown=%dm",
+                                                          regimeAnalysis.GetRootStateString(regimeAnalysis.rootState),
+                                                          params.buyConfidenceThreshold,
+                                                          params.sellConfidenceThreshold,
+                                                          params.cooldownMinutes));
+            // ============ END FIX ============
+
             if (!RegisterSymbol(symbol, params))
             {
                 DebugLogFile("AUTO_REG_ERROR", "❌ Failed to auto-register symbol");
@@ -1026,19 +1114,20 @@ public:
             // ========== CREATE RANGE PACKAGE ==========
             DebugLogFile("PACKAGE_TYPE", "📊 MARKET IS RANGING - Creating RANGE package");
 
-            // Use existing trap analysis or create new
-            TrapAnalysisResult trapResult = RangePackage::AnalyzeForTraps(symbol, PERIOD_M15);
+            // Use RangeIntelligence::AnalyzeRange instead of non-existent AnalyzeForTraps
+            RangeAnalysisResult rangeResult = RangeIntelligence::AnalyzeRange(symbol, PERIOD_M15);
 
             // Populate RANGE package with regime info
             package.marketRegime = "RANGING";
-            package.trapProbability = trapResult.trapProbability;
+            package.trapProbability = rangeResult.trapProbability;
             package.recommendedAction = regimeAnalysis.action; // Use regime's action recommendation
-            package.overallConfidence = (regimeAnalysis.confidence * 0.3) + (trapResult.overrideConfidence * 0.7);
-            package.dominantDirection = trapResult.overrideDirection;
-            package.isTrapZone = trapResult.isTrapZone;
+            package.overallConfidence = (regimeAnalysis.confidence * 0.2) + (rangeResult.overallConfidence * 0.8);
+            package.dominantDirection = rangeResult.overallDirection; // CHANGED: use overallDirection
+            package.isTrapZone = rangeResult.isTrapZone;
             package.isAvoidSignal = (regimeAnalysis.action == "Wait for clarity" ||
-                                     trapResult.recommendedAction == "AVOID");
-            package.trapReason = trapResult.reason;
+                                     rangeResult.rangeAction == "AVOID_HIGH_TRAP"); // CHANGED: use rangeAction
+            package.trapReason = StringFormat("Trap: %.1f%%, Bias: %s",
+                                              rangeResult.trapProbability, rangeResult.rangeBiasDirection);
             package.isValid = true;
             package.signalReason = StringFormat("Market Ranging (%s): %s",
                                                 regimeAnalysis.GetStateString(regimeAnalysis.state),
@@ -1065,7 +1154,7 @@ public:
 
             // Populate TREND package with regime info
             package.marketRegime = "TRENDING";
-            package.overallConfidence = (regimeAnalysis.confidence * 0.3) + (trendPackage.overallConfidence * 0.7);
+            package.overallConfidence = (regimeAnalysis.confidence * 0.2) + (trendPackage.overallConfidence * 0.8);
             package.dominantDirection = trendPackage.directionAnalysis.dominantDirection;
             package.weightedScore = trendPackage.weightedScore;
             package.isValid = true;
@@ -1583,6 +1672,9 @@ public:
         {
             DebugLogFile("PACKAGE_CHECK_SUMMARY", StringFormat("%d packages expired out of %d total symbols", expiredCount, m_totalSymbols));
         }
+
+        // NEW: Check closed positions for profitability
+        CheckClosedPositions();
     }
 
     void OnTimer()
@@ -1685,6 +1777,361 @@ public:
     }
 
 private:
+    // ==================== FIXED: PROFITABILITY CHECKER ====================
+    void CheckClosedPositions()
+    {
+        DebugLogFile("CHECK_CLOSED_POSITIONS_START",
+                     StringFormat("Checking %d symbols for closed positions", m_totalSymbols));
+
+        for (int i = 0; i < m_totalSymbols; i++)
+        {
+            string symbol = m_symbolStates[i].symbol;
+            int magic = m_symbolStates[i].magicNumber;
+
+            // METHOD 1: Check if we have an open position that should be tracked
+            if (m_symbolStates[i].positionOpenTime > 0 &&
+                !m_symbolStates[i].awaitingProfitabilityCheck)
+            {
+                // Check if position is still open
+                bool positionStillOpen = IsPositionStillOpen(symbol, magic);
+
+                if (!positionStillOpen)
+                {
+                    // Position WAS open (we tracked it) but NOW it's closed!
+                    // Must have closed via SL/TP/Manual outside system
+                    DebugLogFile("AUTO_CLOSE_DETECTED",
+                                 StringFormat("Position for %s (Magic: %d) auto-closed! Opened at %s",
+                                              symbol, magic, TimeToString(m_symbolStates[i].positionOpenTime)));
+
+                    // Process it now
+                    ProcessClosedTradeProfitability(i);
+                }
+            }
+
+            // METHOD 2: Original logic for manual closes
+            if (m_symbolStates[i].awaitingProfitabilityCheck &&
+                m_symbolStates[i].positionOpenTime > 0)
+            {
+                // Wait for the trade to fully close (give it 10 seconds)
+                if ((TimeCurrent() - m_symbolStates[i].positionCloseTime) > 10)
+                {
+                    bool positionStillOpen = IsPositionStillOpen(symbol, magic);
+
+                    if (!positionStillOpen)
+                    {
+                        ProcessClosedTradeProfitability(i);
+                    }
+                    else
+                    {
+                        DebugLogFile("PROFIT_CHECK_DEFERRED",
+                                     StringFormat("Position still open for %s (Magic: %d), waiting...",
+                                                  symbol, magic));
+                    }
+                }
+            }
+        }
+    }
+
+    bool IsPositionStillOpen(string symbol, int magicNumber)
+    {
+        int total = PositionsTotal();
+        for (int i = 0; i < total; i++)
+        {
+            ulong ticket = PositionGetTicket(i);
+            if (ticket > 0)
+            {
+                string posSymbol = PositionGetString(POSITION_SYMBOL);
+                long posMagic = PositionGetInteger(POSITION_MAGIC);
+
+                if (posSymbol == symbol && posMagic == magicNumber)
+                {
+                    return true; // Position is still open
+                }
+            }
+        }
+        return false; // Position is closed
+    }
+
+    void ProcessClosedTradeProfitability(int symbolIndex)
+    {
+        string symbol = m_symbolStates[symbolIndex].symbol;
+        int magic = m_symbolStates[symbolIndex].magicNumber;
+
+        DebugLogFile("PROCESS_CLOSED_TRADE",
+                     StringFormat("Processing closed trade for %s (Magic: %d) opened at %s",
+                                  symbol, magic, TimeToString(m_symbolStates[symbolIndex].positionOpenTime)));
+
+        // Look for the CLOSED trade in history (not active positions)
+        bool wasProfitable = CheckClosedTradeInHistory(symbol, magic, m_symbolStates[symbolIndex].positionOpenTime);
+
+        // Get processor type
+        string processorType = m_symbolStates[symbolIndex].lastProcessorUsed;
+
+        // Update metrics with the OPEN decision
+        m_metrics.Update(
+            m_symbolStates[symbolIndex].positionOpenDecision,
+            m_symbolStates[symbolIndex].positionOpenConfidence,
+            wasProfitable,
+            processorType);
+
+        DebugLogFile("CLOSED_TRADE_PROCESSED",
+                     StringFormat("%s | Open: %s | Final Result: %s | Processor: %s",
+                                  symbol,
+                                  DecisionToString(m_symbolStates[symbolIndex].positionOpenDecision),
+                                  wasProfitable ? "WIN" : "LOSS",
+                                  processorType));
+
+        // Reset the stored position info
+        ResetPositionTracking(symbolIndex);
+    }
+
+    bool CheckClosedTradeInHistory(string symbol, int magicNumber, datetime openTime)
+    {
+        int totalDeals = HistoryDealsTotal();
+        double netProfit = 0;
+        bool foundCloseDeal = false;
+
+        DebugLogFile("CHECK_HISTORY_FOR_CLOSED_TRADE",
+                     StringFormat("Checking history for closed trade: %s (Magic: %d)", symbol, magicNumber));
+
+        for (int i = totalDeals - 1; i >= 0; i--)
+        {
+            ulong dealTicket = HistoryDealGetTicket(i);
+            if (dealTicket <= 0)
+                continue;
+
+            datetime dealTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
+
+            // Only check deals that happened after position open
+            if (dealTime < openTime - 60) // Allow 1 minute buffer
+                continue;
+
+            string dealSymbol = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
+            long dealMagic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
+            long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+
+            // Check if this deal belongs to our position
+            if (dealSymbol == symbol && dealMagic == magicNumber)
+            {
+                // Look for OUT/OUT_BY deals (closing deals)
+                if (dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_OUT_BY)
+                {
+                    foundCloseDeal = true;
+
+                    double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+                    double commission = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+                    double swap = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+                    double dealTotal = profit + commission + swap;
+
+                    netProfit += dealTotal;
+
+                    DebugLogFile("CLOSE_DEAL_FOUND",
+                                 StringFormat("Close deal %llu: Time: %s, Profit: $%.2f, Total: $%.2f",
+                                              dealTicket, TimeToString(dealTime), profit, dealTotal));
+                }
+            }
+        }
+
+        if (foundCloseDeal)
+        {
+            bool isProfitable = (netProfit > 0);
+
+            DebugLogFile("CLOSED_TRADE_RESULT",
+                         StringFormat("Closed trade for %s: Net Profit: $%.2f | Profitable: %s",
+                                      symbol, netProfit, isProfitable ? "YES (WIN)" : "NO (LOSS)"));
+
+            return isProfitable;
+        }
+        else
+        {
+            // No close deals found yet - trade might still be processing
+            DebugLogFile("NO_CLOSE_DEALS_FOUND",
+                         StringFormat("No close deals found for %s yet, might still be processing", symbol));
+            return false; // Don't count it yet
+        }
+    }
+
+    void ResetPositionTracking(int symbolIndex)
+    {
+        m_symbolStates[symbolIndex].positionOpenTime = 0;
+        m_symbolStates[symbolIndex].positionCloseTime = 0;
+        m_symbolStates[symbolIndex].positionOpenDecision = ACTION_NONE;
+        m_symbolStates[symbolIndex].positionOpenConfidence = 0;
+        m_symbolStates[symbolIndex].awaitingProfitabilityCheck = false;
+    }
+
+    // ==================== NEW: ENHANCED PROFITABILITY CHECK ====================
+    bool CheckPositionNetProfitability(string symbol, int magicNumber, datetime openTime)
+    {
+        // Find ALL deals for this position (including partial closes)
+        int totalDeals = HistoryDealsTotal();
+        double netProfit = 0;
+        bool positionFound = false;
+
+        DebugLogFile("ENHANCED_PROFIT_TRACKING",
+                     StringFormat("Checking enhanced profitability for %s (Magic: %d) opened at %s",
+                                  symbol, magicNumber, TimeToString(openTime)));
+
+        // We need to check deals from openTime until now
+        datetime endTime = TimeCurrent();
+
+        for (int i = totalDeals - 1; i >= 0; i--)
+        {
+            ulong dealTicket = HistoryDealGetTicket(i);
+            if (dealTicket <= 0)
+                continue;
+
+            datetime dealTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
+
+            // Only check deals that happened after position open
+            if (dealTime < openTime)
+                continue;
+
+            string dealSymbol = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
+            long dealMagic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
+            long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+
+            // Check if this deal belongs to our position
+            if (dealSymbol == symbol && dealMagic == magicNumber)
+            {
+                double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+                double commission = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+                double swap = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+                double dealTotal = profit + commission + swap;
+
+                netProfit += dealTotal;
+                positionFound = true;
+
+                DebugLogFile("POSITION_DEAL_DETAIL_ENHANCED",
+                             StringFormat("Deal %llu: Time: %s, Entry: %d, Profit: $%.2f, Commission: $%.2f, Swap: $%.2f, Total: $%.2f",
+                                          dealTicket, TimeToString(dealTime), dealEntry,
+                                          profit, commission, swap, dealTotal));
+            }
+        }
+
+        if (positionFound)
+        {
+            bool isProfitable = (netProfit > 0);
+
+            DebugLogFile("POSITION_NET_RESULT_ENHANCED",
+                         StringFormat("Position for %s: Net Profit: $%.2f | Profitable: %s",
+                                      symbol, netProfit, isProfitable ? "YES (WIN)" : "NO (LOSS)"));
+
+            return isProfitable;
+        }
+
+        DebugLogFile("POSITION_NOT_FOUND_ENHANCED", "No position deals found in history");
+        return false;
+    }
+
+    ulong GetLastTradeTicket(string symbol, int magicNumber)
+    {
+        int totalDeals = HistoryDealsTotal();
+
+        for (int i = totalDeals - 1; i >= 0; i--)
+        {
+            ulong dealTicket = HistoryDealGetTicket(i);
+            if (dealTicket <= 0)
+                continue;
+
+            string dealSymbol = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
+            long dealMagic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
+            long dealType = HistoryDealGetInteger(dealTicket, DEAL_TYPE);
+
+            if (dealSymbol == symbol && dealMagic == magicNumber &&
+                (dealType == DEAL_TYPE_BUY || dealType == DEAL_TYPE_SELL))
+            {
+                DebugLogFile("LAST_TRADE_TICKET",
+                             StringFormat("Found last trade for %s (Magic: %d): Ticket %llu",
+                                          symbol, magicNumber, dealTicket));
+                return dealTicket;
+            }
+        }
+
+        DebugLogFile("LAST_TRADE_TICKET",
+                     StringFormat("No trade found for %s (Magic: %d)", symbol, magicNumber));
+        return 0;
+    }
+
+    // ================= TRADE PROFITABILITY CHECKING =================
+    bool CheckTradeProfitability(ulong tradeTicket)
+    {
+        if (tradeTicket <= 0)
+        {
+            DebugLogFile("PROFIT_CHECK", "Invalid trade ticket");
+            return false;
+        }
+
+        if (!HistoryDealSelect(tradeTicket))
+        {
+            DebugLogFile("PROFIT_CHECK", StringFormat("Failed to select deal with ticket: %llu", tradeTicket));
+            return false;
+        }
+
+        // Get profit components
+        double profit = HistoryDealGetDouble(tradeTicket, DEAL_PROFIT);
+        double commission = HistoryDealGetDouble(tradeTicket, DEAL_COMMISSION);
+        double swap = HistoryDealGetDouble(tradeTicket, DEAL_SWAP);
+        double total = profit + commission + swap;
+
+        // Log detailed info
+        DebugLogFile("PROFIT_DETAILS",
+                     StringFormat("Ticket: %llu | Profit: $%.2f | Commission: $%.2f | Swap: $%.2f | Total: $%.2f | Profitable: %s",
+                                  tradeTicket, profit, commission, swap, total, total > 0 ? "YES" : "NO"));
+
+        return (total > 0);
+    }
+
+    // Enhanced version to check position profitability
+    bool CheckPositionProfitability(string symbol, int magicNumber, datetime sinceTime = 0)
+    {
+        int totalDeals = HistoryDealsTotal();
+        double totalProfit = 0;
+        int tradeCount = 0;
+        int profitableTrades = 0;
+
+        for (int i = totalDeals - 1; i >= 0; i--)
+        {
+            ulong dealTicket = HistoryDealGetTicket(i);
+            if (dealTicket <= 0)
+                continue;
+
+            datetime dealTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
+            string dealSymbol = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
+            long dealMagic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
+            long dealType = HistoryDealGetInteger(dealTicket, DEAL_TYPE);
+
+            // Filter by symbol, magic, and time
+            if (dealSymbol == symbol && dealMagic == magicNumber &&
+                (sinceTime == 0 || dealTime >= sinceTime) &&
+                (dealType == DEAL_TYPE_BUY || dealType == DEAL_TYPE_SELL))
+            {
+                double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+                double commission = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+                double swap = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+                double netProfit = profit + commission + swap;
+
+                totalProfit += netProfit;
+                tradeCount++;
+                if (netProfit > 0)
+                    profitableTrades++;
+
+                DebugLogFile("POSITION_PROFIT_DETAILS",
+                             StringFormat("Deal: %llu | Time: %s | Type: %s | Net: $%.2f",
+                                          dealTicket, TimeToString(dealTime),
+                                          dealType == DEAL_TYPE_BUY ? "BUY" : "SELL",
+                                          netProfit));
+            }
+        }
+
+        DebugLogFile("POSITION_PROFIT_SUMMARY",
+                     StringFormat("%s (Magic: %d) | Trades: %d | Profitable: %d | Total P/L: $%.2f | Win Rate: %.1f%%",
+                                  symbol, magicNumber, tradeCount, profitableTrades, totalProfit,
+                                  tradeCount > 0 ? ((double)profitableTrades / tradeCount * 100) : 0));
+
+        return (totalProfit > 0);
+    }
+
     // Get market regime analysis
     MarketAnalysis GetMarketRegimeAnalysis(string symbol, ENUM_TIMEFRAMES timeframe = PERIOD_H1)
     {
@@ -1692,50 +2139,74 @@ private:
         return detector.GetMarketRegime();
     }
 
-    // Create regime-based parameters
-    DecisionParams CreateRegimeBasedParams(const MarketAnalysis &regimeAnalysis)
+    // Regime-based parameter adjustment - ADAPTS TO MARKET
+    static DecisionParams CreateRegimeBasedParams(const MarketAnalysis &regime,
+                                                  const DecisionParams &baseParams)
     {
-        if (regimeAnalysis.IsTrending())
+        // Start with the base parameters (either minimal or mk$ profile)
+        DecisionParams params = baseParams;
+
+        DebugLogFile("REGIME_ADAPT_START",
+                     StringFormat("Adapting params for regime: %s",
+                                  regime.GetRootStateString(regime.rootState)));
+
+        if (regime.IsTrending())
         {
-            // More aggressive in trending markets
-            return DecisionParams(
-                65.0, // buyConfidenceThreshold (lower for trends)
-                70.0, // sellConfidenceThreshold
-                40.0, // closePositionThreshold
-                40.0, // closeAllThreshold
-                30,   // cooldownMinutes (shorter in trends)
-                2,    // maxPositionsPerSymbol
-                20.0, // riskPercent
-                2.0,  // minRiskRewardRatio (higher for trends)
-                75.0, // rangeBuyThreshold
-                75.0, // rangeSellThreshold
-                65.0, // trendBuyThreshold
-                70.0, // trendSellThreshold
-                65.0  // trapProbabilityThreshold
-            );
+            DebugLogFile("TRENDING_ADAPT", "Adapting for TRENDING market");
+
+            // Trending market adjustments
+            params.cooldownMinutes = MathMax(30, baseParams.cooldownMinutes / 2);            // Faster entries
+            params.maxPositionsPerSymbol = MathMin(3, baseParams.maxPositionsPerSymbol + 1); // More positions
+
+            // Adjust thresholds for trend following
+            if (regime.direction == "Bullish")
+            {
+                params.buyConfidenceThreshold = MathMax(55.0, baseParams.trendBuyThreshold - 5.0);
+                params.sellConfidenceThreshold = MathMax(60.0, baseParams.trendSellThreshold + 5.0);
+            }
+            else if (regime.direction == "Bearish")
+            {
+                params.buyConfidenceThreshold = MathMax(60.0, baseParams.trendBuyThreshold + 5.0);
+                params.sellConfidenceThreshold = MathMax(55.0, baseParams.trendSellThreshold - 5.0);
+            }
+
+            // Risk management for trends
+            params.minRiskRewardRatio = MathMax(2.0, baseParams.minRiskRewardRatio);
+
+            DebugLogFile("TRENDING_ADAPT_DONE",
+                         StringFormat("Cooldown: %d→%d, MaxPos: %d→%d, RR: %.1f→%.1f",
+                                      baseParams.cooldownMinutes, params.cooldownMinutes,
+                                      baseParams.maxPositionsPerSymbol, params.maxPositionsPerSymbol,
+                                      baseParams.minRiskRewardRatio, params.minRiskRewardRatio));
         }
-        else if (regimeAnalysis.IsRanging())
+        else if (regime.IsRanging())
         {
-            // More conservative in ranging markets
-            return DecisionParams(
-                75.0, // buyConfidenceThreshold (higher for ranges)
-                75.0, // sellConfidenceThreshold
-                50.0, // closePositionThreshold (higher)
-                50.0, // closeAllThreshold (higher)
-                60,   // cooldownMinutes (longer in ranges)
-                1,    // maxPositionsPerSymbol (fewer in ranges)
-                15.0, // riskPercent (lower)
-                1.5,  // minRiskRewardRatio (lower for ranges)
-                75.0, // rangeBuyThreshold
-                75.0, // rangeSellThreshold
-                65.0, // trendBuyThreshold
-                70.0, // trendSellThreshold
-                50.0  // trapProbabilityThreshold (lower)
-            );
+            DebugLogFile("RANGING_ADAPT", "Adapting for RANGING market");
+
+            // Ranging market adjustments
+            params.cooldownMinutes = MathMin(120, baseParams.cooldownMinutes * 2);           // Slower entries
+            params.maxPositionsPerSymbol = MathMax(1, baseParams.maxPositionsPerSymbol - 1); // Fewer positions
+
+            // Higher thresholds for range trading
+            params.buyConfidenceThreshold = MathMax(70.0, baseParams.rangeBuyThreshold);
+            params.sellConfidenceThreshold = MathMax(70.0, baseParams.rangeSellThreshold);
+
+            // More conservative in ranges
+            params.minRiskRewardRatio = MathMax(1.0, baseParams.minRiskRewardRatio - 0.5);
+            params.trapProbabilityThreshold = MathMax(40.0, baseParams.trapProbabilityThreshold - 10.0);
+
+            DebugLogFile("RANGING_ADAPT_DONE",
+                         StringFormat("Cooldown: %d→%d, MaxPos: %d→%d, Trap: %.1f→%.1f",
+                                      baseParams.cooldownMinutes, params.cooldownMinutes,
+                                      baseParams.maxPositionsPerSymbol, params.maxPositionsPerSymbol,
+                                      baseParams.trapProbabilityThreshold, params.trapProbabilityThreshold));
+        }
+        else
+        {
+            DebugLogFile("UNKNOWN_REGIME", "Keeping base params for unknown regime");
         }
 
-        // Default parameters
-        return CreateMKParams();
+        return params;
     }
 
     // Apply regime-based position size
@@ -2053,31 +2524,31 @@ private:
         switch (regimeAnalysis.state)
         {
         case STATE_TRENDING_LOW_VOL:
-            stateMultiplier = 1.0;  //0.85; // More aggressive in healthy trends
+            stateMultiplier = 1.0; // 0.85; // More aggressive in healthy trends
             adjustmentReason = "Healthy low-volatility trend - 15% more aggressive";
             DebugLogFile("TREND_STATE_ADJ", "✅ HEALTHY TREND: Using 15% more aggressive thresholds");
             break;
 
         case STATE_TRENDING_HIGH_VOL:
-            stateMultiplier = 1.0;  //1.25; // More conservative in exhaustion
+            stateMultiplier = 1.0; // 1.25; // More conservative in exhaustion
             adjustmentReason = "High-volatility/Exhaustion trend - 25% more conservative";
             DebugLogFile("TREND_STATE_ADJ", "⚠️ EXHAUSTION TREND: Using 25% more conservative thresholds");
             break;
 
         case STATE_EXPANSION:
-            stateMultiplier = 1.0;  //0.8; // Very aggressive in expansions
+            stateMultiplier = 1.0; // 0.8; // Very aggressive in expansions
             adjustmentReason = "Trend expansion/breakout - 20% more aggressive";
             DebugLogFile("TREND_STATE_ADJ", "🚀 EXPANSION: Using 20% more aggressive thresholds");
             break;
 
         case STATE_CONTRACTION:
-            stateMultiplier = 1.0;  //1.5; // Very conservative during contractions
+            stateMultiplier = 1.0; // 1.5; // Very conservative during contractions
             adjustmentReason = "Contraction before trend - 50% more conservative";
             DebugLogFile("TREND_STATE_ADJ", "⚡ CONTRACTION: Using 50% more conservative thresholds");
             break;
 
         default:
-            stateMultiplier = 1.0;  //1.0;
+            stateMultiplier = 1.0; // 1.0;
             adjustmentReason = "Standard trending market";
             DebugLogFile("TREND_STATE_ADJ", "📈 STANDARD TREND: Using normal thresholds");
             break;
@@ -2101,13 +2572,51 @@ private:
 
         // Check direction alignment with market regime
         bool directionAligned = false;
-        if (regimeAnalysis.direction == "Bullish" && direction == "BULLISH")
-            directionAligned = true;
-        else if (regimeAnalysis.direction == "Bearish" && direction == "BEARISH")
-            directionAligned = true;
+        bool shouldPreferPackage = false; // NEW: Flag to track if we should prefer package direction
+        string alignmentNote = "";        // NEW: Track alignment reason
 
-        DebugLogFile("DIRECTION_ALIGNMENT", StringFormat("Package vs Regime direction alignment: %s",
-                                                         directionAligned ? "✅ ALIGNED" : "⚠️ MISALIGNED"));
+        if (regimeAnalysis.direction == "Bullish" && direction == "BULLISH")
+        {
+            directionAligned = true;
+            alignmentNote = "✅ BULLISH alignment: Package=BULLISH, Regime=Bullish";
+        }
+        else if (regimeAnalysis.direction == "Bearish" && direction == "BEARISH")
+        {
+            directionAligned = true;
+            alignmentNote = "✅ BEARISH alignment: Package=BEARISH, Regime=Bearish";
+        }
+        else
+        {
+            // CONTRADICTION DETECTED - prefer trend package direction
+            if (regimeAnalysis.IsTrending())
+            {
+                // In trending markets, PREFER TREND PACKAGE over regime
+                shouldPreferPackage = true;
+
+                if (direction == "BULLISH")
+                {
+                    alignmentNote = "⚠️ CONTRADICTION - Preferring TREND PACKAGE BULLISH (Regime suggests: " +
+                                    regimeAnalysis.direction + ")";
+                    directionAligned = true; // Override: accept package direction
+                }
+                else if (direction == "BEARISH")
+                {
+                    alignmentNote = "⚠️ CONTRADICTION - Preferring TREND PACKAGE BEARISH (Regime suggests: " +
+                                    regimeAnalysis.direction + ")";
+                    directionAligned = true; // Override: accept package direction
+                }
+            }
+            else
+            {
+                // In ranging or unknown markets, respect the contradiction
+                directionAligned = false;
+                alignmentNote = "❌ Direction mismatch: Package=" + direction +
+                                ", Regime=" + regimeAnalysis.direction +
+                                " (Not trending, respecting contradiction)";
+            }
+        }
+
+        DebugLogFile("DIRECTION_ALIGNMENT", alignmentNote);
 
         // ============ STEP 5: HANDLE NO POSITION CASE ============
         if (positions.state == STATE_NO_POSITION)
@@ -2259,37 +2768,37 @@ private:
         switch (regimeAnalysis.state)
         {
         case STATE_RANGING_LOW_VOL:
-            stateMultiplier = 1.0;  // 0.9; // More aggressive in stable ranges
+            stateMultiplier = 1.0; // 0.9; // More aggressive in stable ranges
             adjustmentReason = "Low-volatility range - 10% more aggressive";
             DebugLogFile("RANGE_STATE_ADJ", "📊 LOW VOL RANGE: Using 10% more aggressive thresholds");
             break;
 
         case STATE_RANGING_HIGH_VOL:
-            stateMultiplier = 1.0;  // 1.3; // More conservative in volatile ranges
+            stateMultiplier = 1.0; // 1.3; // More conservative in volatile ranges
             adjustmentReason = "High-volatility range - 30% more conservative";
             DebugLogFile("RANGE_STATE_ADJ", "⚠️ HIGH VOL RANGE: Using 30% more conservative thresholds");
             break;
 
         case STATE_CONTRACTION:
-            stateMultiplier = 1.0;  // 1.5; // Very conservative during contractions
+            stateMultiplier = 1.0; // 1.5; // Very conservative during contractions
             adjustmentReason = "Range contraction/squeeze - 50% more conservative";
             DebugLogFile("RANGE_STATE_ADJ", "⚡ CONTRACTION: Using 50% more conservative thresholds");
             break;
 
         case STATE_CHURN:
-            stateMultiplier = 1.0;  // 2.0; // Extremely conservative during churn
+            stateMultiplier = 1.0; // 2.0; // Extremely conservative during churn
             adjustmentReason = "Market churn/exhaustion - 100% more conservative";
             DebugLogFile("RANGE_STATE_ADJ", "🌀 CHURN: Using 100% more conservative thresholds");
             break;
 
         case STATE_EXPANSION:
-            stateMultiplier = 1.0;  // 0.8; // More aggressive during expansions
+            stateMultiplier = 1.0; // 0.8; // More aggressive during expansions
             adjustmentReason = "Range expansion - 20% more aggressive";
             DebugLogFile("RANGE_STATE_ADJ", "🚀 EXPANSION: Using 20% more aggressive thresholds");
             break;
 
         default:
-            stateMultiplier = 1.0;  // 1.0;
+            stateMultiplier = 1.0; // 1.0;
             adjustmentReason = "Standard ranging market";
             DebugLogFile("RANGE_STATE_ADJ", "📊 STANDARD RANGE: Using normal thresholds");
             break;
@@ -3228,12 +3737,40 @@ private:
 
         if (success)
         {
-            LogInfo(StringFormat("EXECUTED: %s for %s | Conf: %.1f%%",
-                                 decisionStr, symbol, package.overallConfidence));
+            if (decision == ACTION_OPEN_BUY || decision == ACTION_OPEN_SELL)
+            {
+                // Store position open info for later profitability check
+                int symbolIndex = FindSymbolIndex(symbol);
+                if (symbolIndex >= 0)
+                {
+                    m_symbolStates[symbolIndex].positionOpenTime = TimeCurrent();
+                    m_symbolStates[symbolIndex].positionOpenDecision = decision;
+                    m_symbolStates[symbolIndex].positionOpenConfidence = package.overallConfidence;
 
-            Logger::LogTradeFast(m_engineName, symbol, decisionStr, package.overallConfidence);
-            DebugLogFile("TRADE_LOG", StringFormat("Trade logged: %s %s at %.1f%% confidence",
-                                                   decisionStr, symbol, package.overallConfidence));
+                    // DON'T update metrics here! Wait for close.
+
+                    DebugLogFile("POSITION_OPEN_RECORDED",
+                                 StringFormat("Recorded open for %s | Decision: %s | Conf: %.1f%% | Waiting for close...",
+                                              symbol,
+                                              DecisionToString(decision),
+                                              package.overallConfidence));
+                }
+            }
+            else if (decision == ACTION_CLOSE_BUY || decision == ACTION_CLOSE_SELL || decision == ACTION_CLOSE_ALL)
+            {
+                // This is a CLOSE signal - mark that we're waiting for the position to actually close
+                int symbolIndex = FindSymbolIndex(symbol);
+                if (symbolIndex >= 0 && m_symbolStates[symbolIndex].positionOpenTime > 0)
+                {
+                    m_symbolStates[symbolIndex].positionCloseTime = TimeCurrent();
+                    m_symbolStates[symbolIndex].awaitingProfitabilityCheck = true;
+
+                    DebugLogFile("CLOSE_SIGNAL_RECEIVED",
+                                 StringFormat("Close signal for %s | Open was: %s | Awaiting actual close...",
+                                              symbol,
+                                              DecisionToString(m_symbolStates[symbolIndex].positionOpenDecision)));
+                }
+            }
         }
         else
         {
