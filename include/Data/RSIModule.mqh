@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                           SimpleRSI.mqh                          |
 //|           RSI Bias & Confidence with IndicatorManager            |
-//|           MODULE-ONLY VERSION - NO TRADEPACKAGE DEPENDENCIES     |
+//|           MODULE-ONLY VERSION - NO TrendPackage DEPENDENCIES     |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024"
 #property strict
@@ -10,7 +10,7 @@
 #include "IndicatorManager.mqh"
 
 // ==================== DEBUG SETTINGS ====================
-bool DEBUG_SIMPLE_RSI = true;
+bool DEBUG_SIMPLE_RSI = false;
 
 // Simple debug function using Logger
 void DebugLogSimpleRSI(string context, string message) {
@@ -149,7 +149,7 @@ private:
     
 public:
     // CONSTRUCTOR - With optional IndicatorManager
-    SimpleRSI(string symbol, ENUM_TIMEFRAMES tf = PERIOD_H1, int period = 14, 
+    SimpleRSI(string symbol, ENUM_TIMEFRAMES tf = PERIOD_M15, int period = 14, 
              IndicatorManager* indicatorMgr = NULL)
     {
         m_symbol = symbol;

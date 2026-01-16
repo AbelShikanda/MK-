@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                                      TradePackage|
+//|                                                      TrendPackage|
 //|                 Central DATA STRUCTURE ONLY                     |
 //|                 NO MODULE INSTANCES - NO INITIALIZATION         |
 //+------------------------------------------------------------------+
@@ -13,7 +13,7 @@
 struct POIModuleSignal;
 
 // ====================== DEBUG SETTINGS ======================
-bool DEBUG_ENABLED_TP = true;
+bool DEBUG_ENABLED_TP = false;
 
 void DebugLogTP(string context, string message) {
    if(DEBUG_ENABLED_TP) {
@@ -150,7 +150,7 @@ struct MTFData {
    }
 };
 
-// In TradePackage.mqh - SIMPLIFIED POISignal (no conversion constructor)
+// In TrendPackage.mqh - SIMPLIFIED POISignal (no conversion constructor)
 struct POISignal {
    string overallBias;
    string zoneBias;
@@ -366,7 +366,7 @@ struct RiskManagement {
    double accountRisk;
    
    RiskManagement() {
-      maxRiskPercent = 10.0;
+      maxRiskPercent = 30.0;
       minRiskReward = 1.5;
       maxPositionSize = 10.0;
       useDynamicSizing = true;
@@ -401,7 +401,7 @@ struct DisplayConfig {
 
 // ====================== TRADE PACKAGE CLASS ======================
 
-class TradePackage
+class TrendPackage
 {
 public:
    // Core signal and setup
@@ -450,16 +450,16 @@ public:
    DisplayConfig displayConfig;
    
    // Constructor
-   TradePackage() {
-      DebugLogTP("TradePackage", "Constructor called");
+   TrendPackage() {
+      DebugLogTP("TrendPackage", "Constructor called");
       
       // Initialize weights for 6 components (default balanced weights)
-      weights.mtfWeight = 31.0;
-      weights.volumeWeight = 20.0;
-      weights.rsiWeight = 11.0;
-      weights.macdWeight = 11.0;
-      weights.patternWeight = 11.0;
-      weights.poiWeight = 16.0;  // POI weight
+      weights.mtfWeight = 35.0;
+      weights.volumeWeight = 15.0;
+      weights.rsiWeight = 13.0;
+      weights.macdWeight = 13.0;
+      weights.patternWeight = 10.0;
+      weights.poiWeight = 14.0;  // POI weight
       
       // Initialize aggregated results
       overallConfidence = 0;
@@ -468,7 +468,7 @@ public:
       validationMessage = "Not analyzed";
       analysisTime = TimeCurrent();
       
-      DebugLogTP("TradePackage", "Constructor completed");
+      DebugLogTP("TrendPackage", "Constructor completed");
    }
    
    // ==================== CORE METHODS (PURE DATA PROCESSING) ====================
@@ -1086,7 +1086,7 @@ public:
       signal.orderType = orderType;
       signal.reason = reason;
       signal.timestamp = TimeCurrent();
-      signal.signalSource = (source == "") ? "TradePackage" : source;
+      signal.signalSource = (source == "") ? "TrendPackage" : source;
    }
    
    // Set setup information

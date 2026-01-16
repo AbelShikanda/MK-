@@ -624,18 +624,18 @@ private:
 public:
     CandlestickPatternAnalyzer() {
         m_symbol = "";
-        m_timeframe = PERIOD_CURRENT;
+        m_timeframe = PERIOD_M15;
         m_initialized = false;
     }
     
-    bool Initialize(string symbol = NULL, ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
+    bool Initialize(string symbol = NULL, ENUM_TIMEFRAMES timeframe = PERIOD_M15) {
         if(m_initialized) {
             // Logger::Log("CandlePatterns", "Already initialized", false, true);
             return false;
         }
         
         m_symbol = (symbol == NULL || symbol == "") ? Symbol() : symbol;
-        m_timeframe = (timeframe == PERIOD_CURRENT) ? Period() : timeframe;
+        m_timeframe = (timeframe == PERIOD_M15) ? Period() : timeframe;
         
         // Test data retrieval with error handling
         double testClose = iClose(m_symbol, m_timeframe, 0);
@@ -785,12 +785,12 @@ public:
 // Single instance for easy access
 CandlestickPatternAnalyzer g_CandleAnalyzer;
 
-bool InitializeCandleAnalyzer(string symbol = NULL, ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
+bool InitializeCandleAnalyzer(string symbol = NULL, ENUM_TIMEFRAMES timeframe = PERIOD_M15) {
     return g_CandleAnalyzer.Initialize(symbol, timeframe);
 }
 
 // Returns module-specific PatternResult
-PatternResult AnalyzeCandlePattern(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_CURRENT, int shift = 1) {
+PatternResult AnalyzeCandlePattern(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_M15, int shift = 1) {
     if(!g_CandleAnalyzer.Initialize(symbol, tf)) {
         PatternResult empty;
         return empty;
@@ -799,7 +799,7 @@ PatternResult AnalyzeCandlePattern(string symbol = NULL, ENUM_TIMEFRAMES tf = PE
 }
 
 // Returns module-specific CandlePatternSignal
-CandlePatternSignal GetCandlePatternSignal(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_CURRENT, int shift = 1) {
+CandlePatternSignal GetCandlePatternSignal(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_M15, int shift = 1) {
     if(!g_CandleAnalyzer.Initialize(symbol, tf)) {
         CandlePatternSignal empty;
         return empty;
@@ -808,7 +808,7 @@ CandlePatternSignal GetCandlePatternSignal(string symbol = NULL, ENUM_TIMEFRAMES
 }
 
 // Returns module-specific CandleComponentDisplay
-CandleComponentDisplay GetCandleCandleComponentDisplay(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_CURRENT, int shift = 1) {
+CandleComponentDisplay GetCandleCandleComponentDisplay(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_M15, int shift = 1) {
     if(!g_CandleAnalyzer.Initialize(symbol, tf)) {
         return CandleComponentDisplay("CANDLE", "NEUTRAL", 0, 0, 0, false, "Not initialized");
     }
@@ -816,48 +816,48 @@ CandleComponentDisplay GetCandleCandleComponentDisplay(string symbol = NULL, ENU
 }
 
 // Utility functions for quick checks
-double GetCandlePatternScore(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_CURRENT, int shift = 1) {
+double GetCandlePatternScore(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_M15, int shift = 1) {
     if(!g_CandleAnalyzer.Initialize(symbol, tf)) return 0;
     return g_CandleAnalyzer.GetPatternScore(shift);
 }
 
-string GetCandlePatternDirection(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_CURRENT, int shift = 1) {
+string GetCandlePatternDirection(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_M15, int shift = 1) {
     if(!g_CandleAnalyzer.Initialize(symbol, tf)) return "NEUTRAL";
     return g_CandleAnalyzer.GetPatternDirection(shift);
 }
 
-bool HasStrongCandlePattern(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_CURRENT, int shift = 1) {
+bool HasStrongCandlePattern(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_M15, int shift = 1) {
     if(!g_CandleAnalyzer.Initialize(symbol, tf)) return false;
     return g_CandleAnalyzer.HasStrongPattern(shift);
 }
 
 // Signal checking functions
-bool CandlePatternSignalsBuy(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_CURRENT, int shift = 1) {
+bool CandlePatternSignalsBuy(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_M15, int shift = 1) {
     if(!g_CandleAnalyzer.Initialize(symbol, tf)) return false;
     return g_CandleAnalyzer.HasBuySignal(shift);
 }
 
-bool CandlePatternSignalsSell(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_CURRENT, int shift = 1) {
+bool CandlePatternSignalsSell(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_M15, int shift = 1) {
     if(!g_CandleAnalyzer.Initialize(symbol, tf)) return false;
     return g_CandleAnalyzer.HasSellSignal(shift);
 }
 
 // Trade setup functions
 bool GetCandleTradeSetup(string symbol, double &entry, double &stopLoss, double &takeProfit, 
-                        double &riskReward, ENUM_TIMEFRAMES tf = PERIOD_CURRENT, int shift = 1) {
+                        double &riskReward, ENUM_TIMEFRAMES tf = PERIOD_M15, int shift = 1) {
     if(!g_CandleAnalyzer.Initialize(symbol, tf)) return false;
     return g_CandleAnalyzer.GetTradeSetup(entry, stopLoss, takeProfit, riskReward, shift);
 }
 
 // Position size calculation
 double GetCandleBasedPositionSize(string symbol = NULL, double riskPercent = 1.0, 
-                                 ENUM_TIMEFRAMES tf = PERIOD_CURRENT, int shift = 1) {
+                                 ENUM_TIMEFRAMES tf = PERIOD_M15, int shift = 1) {
     if(!g_CandleAnalyzer.Initialize(symbol, tf)) return 0.01;
     return g_CandleAnalyzer.GetRecommendedPositionSize(riskPercent, shift);
 }
 
 // Pattern analysis in window
-PatternResult AnalyzeCandlePatternsInWindow(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_CURRENT, 
+PatternResult AnalyzeCandlePatternsInWindow(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_M15, 
                                            int windowSize = 10) {
     if(!g_CandleAnalyzer.Initialize(symbol, tf)) {
         PatternResult empty;

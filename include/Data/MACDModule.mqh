@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                              MACDModule.mqh                     |
 //|                Clean MACD Analysis with Bias and Confidence      |
-//|                [INTEGRATED WITH UTILS, LOGGER, INDICATOR & NO TRADEPACKAGE]|
+//|                [INTEGRATED WITH UTILS, LOGGER, INDICATOR & NO TrendPackage]|
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024"
 #property strict
@@ -12,7 +12,7 @@
 #include "../Utils/TimeUtils.mqh"
 
 // ==================== DEBUG SETTINGS ====================
-bool MACD_DEBUG_ENABLED = true;
+bool MACD_DEBUG_ENABLED = false;
 
 // Debug function using integrated Logger
 void DebugLogMACD(string context, string message) {
@@ -280,7 +280,7 @@ public:
     MACDModule()
     {
         m_symbol = "";
-        m_timeframe = PERIOD_H1;
+        m_timeframe = PERIOD_M15;
         m_initialized = false;
         m_lastSignal = MACDSignal();
         m_lastSignalTime = 0;
@@ -294,7 +294,7 @@ public:
     
 public:
     // Initialize with specific timeframe
-    bool Initialize(string symbol, ENUM_TIMEFRAMES timeframe = PERIOD_H1) 
+    bool Initialize(string symbol, ENUM_TIMEFRAMES timeframe = PERIOD_M15) 
     {
         if(m_initialized) return true;
         

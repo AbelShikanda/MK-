@@ -36,3 +36,55 @@ enum ENUM_POI_BIAS {
     POI_BIAS_BEARISH,
     POI_BIAS_CONFLICTED
 };
+
+// ================= ENUMS =================
+// enum DECISION_ACTION
+// {
+//     ACTION_NONE,
+//     ACTION_OPEN_BUY,
+//     ACTION_OPEN_SELL,
+//     ACTION_CLOSE_BUY,
+//     ACTION_CLOSE_SELL,
+//     ACTION_CLOSE_ALL,
+//     ACTION_HOLD,
+//     ACTION_WAITING_FOR_PACKAGE
+// };
+
+// enum POSITION_STATE
+// {
+//     STATE_NO_POSITION,
+//     STATE_HAS_BUY,
+//     STATE_HAS_SELL,
+//     STATE_HAS_BOTH
+// };
+
+//+------------------------------------------------------------------+
+//| Market State Enumerations                                        |
+//+------------------------------------------------------------------+
+enum ENUM_ROOT_REGIME
+  {
+   REGIME_TRENDING,
+   REGIME_RANGING,
+   REGIME_UNKNOWN
+  };
+
+enum ENUM_MARKET_STATE
+  {
+   STATE_RANGING_LOW_VOL,     // 1 - Low volatility range
+   STATE_RANGING_HIGH_VOL,    // 2 - High volatility range
+   STATE_TRENDING_LOW_VOL,    // 3 - Healthy trend, low vol
+   STATE_TRENDING_HIGH_VOL,   // 4 - Parabolic/exhaustion trend
+   STATE_CONTRACTION,         // 5 - Squeeze/compression
+   STATE_EXPANSION,           // 6 - Breakout/expansion
+   STATE_CHURN,               // 7 - Exhaustion/distribution
+   STATE_UNKNOWN
+  };
+
+enum ENUM_POSITION_SIZE
+  {
+   SIZE_ZERO,
+   SIZE_VERY_SMALL,
+   SIZE_SMALL,
+   SIZE_MEDIUM,
+   SIZE_LARGE
+  };

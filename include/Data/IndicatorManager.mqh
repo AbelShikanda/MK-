@@ -6,10 +6,10 @@
 
 #include "../Utils/Logger.mqh"
 #include "../Utils/MathUtils.mqh"
-// #include "../Data/tradepackage.mqh"
+// #include "../Data/TrendPackage.mqh"
 
 // Debug configuration
-bool DEBUG_INDICATOR_ENABLED = true;
+bool DEBUG_INDICATOR_ENABLED = false;
 
 // Simple debug function using Logger
 void DebugLogIndicator(string context, string message) {
@@ -45,14 +45,14 @@ private:
    struct IndicatorHandles
    {
       int ma_fast;      // Fast MA (e.g., 9 period)
-      int ma_slow;      // Slow MA (e.g., 21 period)
+      int ma_medium;    // Medium MA (e.g., 21 period)
+      int ma_slow;      // Slow MA (e.g., 89 period)
       int rsi;          // RSI
       int macd;         // MACD
       int adx;          // ADX
       int stoch;        // Stochastic
       int atr;          // ATR
       int volume;       // Volumes
-      int ma_medium;    // Medium MA (e.g., 89 period)
       int bbands;       // Bollinger Bands
    };
    
@@ -108,14 +108,6 @@ public:
       {
          ENUM_TIMEFRAMES currentTF = m_timeframes[i];
          
-         // ========== REMOVE THIS SECTION ==========
-         // Delete this PERIOD_CURRENT special handling:
-         // if(currentTF == PERIOD_CURRENT) {
-         //     currentTF = PERIOD_H1;
-         //     DebugLogIndicator("IndicatorManager", "Using H1 for PERIOD_CURRENT indicators");
-         // }
-         // ========== END REMOVE ==========
-         
          // Validate timeframe is valid
          if(!IsTimeframeAvailable(currentTF))
          {
@@ -127,8 +119,8 @@ public:
          
          // Create indicators with the actual timeframe
          m_handles[i].ma_fast = iMA(m_symbol, currentTF, 9, 0, MODE_EMA, PRICE_CLOSE);
-         m_handles[i].ma_slow = iMA(m_symbol, currentTF, 21, 0, MODE_SMA, PRICE_CLOSE);
-         m_handles[i].ma_medium = iMA(m_symbol, currentTF, 89, 0, MODE_SMA, PRICE_CLOSE);
+         m_handles[i].ma_medium = iMA(m_symbol, currentTF, 21, 0, MODE_SMA, PRICE_CLOSE);
+         m_handles[i].ma_slow = iMA(m_symbol, currentTF, 89, 0, MODE_SMA, PRICE_CLOSE);
          m_handles[i].rsi = iRSI(m_symbol, currentTF, 14, PRICE_CLOSE);
          m_handles[i].macd = iMACD(m_symbol, currentTF, 12, 26, 9, PRICE_CLOSE);
          m_handles[i].adx = iADX(m_symbol, currentTF, 14);
@@ -164,8 +156,8 @@ public:
       for(int i = 0; i < m_timeframe_count; i++)
       {
          if(ValidateHandle(m_handles[i].ma_fast)) IndicatorRelease(m_handles[i].ma_fast);
-         if(ValidateHandle(m_handles[i].ma_slow)) IndicatorRelease(m_handles[i].ma_slow);
          if(ValidateHandle(m_handles[i].ma_medium)) IndicatorRelease(m_handles[i].ma_medium);
+         if(ValidateHandle(m_handles[i].ma_slow)) IndicatorRelease(m_handles[i].ma_slow);
          if(ValidateHandle(m_handles[i].rsi)) IndicatorRelease(m_handles[i].rsi);
          if(ValidateHandle(m_handles[i].macd)) IndicatorRelease(m_handles[i].macd);
          if(ValidateHandle(m_handles[i].adx)) IndicatorRelease(m_handles[i].adx);
@@ -212,7 +204,7 @@ public:
    }
    
    // Get Moving Average values
-   bool GetMAValues(ENUM_TIMEFRAMES tf, double &ma_fast, double &ma_slow, double &ma_medium, int shift = 0)
+   bool GetMAValues(ENUM_TIMEFRAMES tf, double &ma_fast, double &ma_medium, double &ma_slow, int shift = 0)
    {
       if(!m_initialized) 
       {
@@ -241,6 +233,82 @@ public:
       }
       
       return allValid;
+   }
+
+   // Get Moving Average values for RangeScanner (with 4 MAs: 9, 21, 50, 89)
+   bool GetMAValuesForRange(ENUM_TIMEFRAMES tf, double &ma9, double &ma21, double &ma50, double &ma89, int shift = 0)
+   {
+      if(!m_initialized) 
+      {
+         ma9 = ma21 = ma50 = ma89 = 0.0;
+         return false;
+      }
+      
+      int idx = GetTimeframeIndex(tf);
+      if(idx == -1) 
+      {
+         ma9 = ma21 = ma50 = ma89 = 0.0;
+         return false;
+      }
+      
+      // Get existing MAs (fast, medium, slow) from current handles
+      ma9 = GetIndicatorValue(m_handles[idx].ma_fast, 0, shift);
+      ma21 = GetIndicatorValue(m_handles[idx].ma_medium, 0, shift);
+      ma89 = GetIndicatorValue(m_handles[idx].ma_slow, 0, shift);
+      
+      // For MA89, we need to create a new handle if not exists
+      // Check if we already have an MA89 handle for this timeframe
+      int ma50_handle = GetOrCreateMAHandle(tf, 50);
+      
+      if(ma50_handle == INVALID_HANDLE)
+      {
+         ma9 = ma21 = ma50 = ma89 = 0.0;
+         return false;
+      }
+      
+      ma50 = GetIndicatorValue(ma50_handle, 0, shift);
+      
+      // Validate all values
+      bool allValid = (ma9 != 0.0 && ma21 != 0.0 && ma50 != 0.0 && ma89 != 0.0);
+      
+      if(!allValid)
+      {
+         DebugLogIndicator("IndicatorManager::GetMAValuesForRange", 
+            StringFormat("Some MA values invalid: 9=%.5f, 21=%.5f, 50=%.5f, 89=%.5f", 
+            ma9, ma21, ma50, ma89));
+      }
+      
+      return allValid;
+   }
+
+   // Helper function to get or create MA handle for specific period
+   int GetOrCreateMAHandle(ENUM_TIMEFRAMES tf, int period)
+   {
+      string key = StringFormat("MA_%d_%d", tf, period);
+      
+      // Check if handle already exists in our cache
+      // if(m_ma_handles_cache.ContainsKey(key))
+      // {
+      //    return m_ma_handles_cache[key];
+      // }
+      
+      // Create new MA handle
+      int handle = iMA(_Symbol, tf, period, 0, MODE_SMA, PRICE_CLOSE);
+      
+      if(handle == INVALID_HANDLE)
+      {
+         DebugLogIndicator("IndicatorManager", 
+            StringFormat("Failed to create MA(%d) handle for TF %s", period, EnumToString(tf)));
+         return INVALID_HANDLE;
+      }
+      
+      // Add to cache
+      // m_ma_handles_cache[key] = handle;
+      
+      DebugLogIndicator("IndicatorManager", 
+         StringFormat("Created MA(%d) handle for TF %s: %d", period, EnumToString(tf), handle));
+      
+      return handle;
    }
    
    // Get RSI value
@@ -430,7 +498,7 @@ public:
       }
       
       // ========== ADD M1 VALIDATION ==========
-      if(tf == PERIOD_M1)
+      if(tf == PERIOD_M15)
       {
          // M1 ATR is very small - add special validation
          double point = SymbolInfoDouble(m_symbol, SYMBOL_POINT);
@@ -882,7 +950,7 @@ public:
    }
    
    // Calculate position size based on ATR
-   double CalculatePositionSize(double risk_percent, double stop_loss_pips, ENUM_TIMEFRAMES tf = PERIOD_H1)
+   double CalculatePositionSize(double risk_percent, double stop_loss_pips, ENUM_TIMEFRAMES tf = PERIOD_M15)
    {
       if(!m_initialized) return 0.01;
       
@@ -1189,20 +1257,20 @@ private:
    //          return false;
    //      }
         
-   //      // 2. Check if TradePackage exists
-   //      if(m_tradePackage == NULL) {
-   //          DebugLogEA("IndicatorManager", "TradePackage not set");
+   //      // 2. Check if TrendPackage exists
+   //      if(m_TrendPackage == NULL) {
+   //          DebugLogEA("IndicatorManager", "TrendPackage not set");
    //          return false;
    //      }
         
-   //      // 3. Let TradePackage handle auto-execution
-   //      bool executed = m_tradePackage->UpdateAndExecute();
+   //      // 3. Let TrendPackage handle auto-execution
+   //      bool executed = m_TrendPackage->UpdateAndExecute();
         
    //      if(executed) {
-   //          DebugLogEA("IndicatorManager", "TradePackage executed successfully via auto-execution");
+   //          DebugLogEA("IndicatorManager", "TrendPackage executed successfully via auto-execution");
    //      }
    //      else {
-   //          DebugLogEA("IndicatorManager", "TradePackage not executed (low confidence or no action)");
+   //          DebugLogEA("IndicatorManager", "TrendPackage not executed (low confidence or no action)");
    //      }
         
    //      return executed;

@@ -10,7 +10,7 @@
 #include "../Utils/TimeUtils.mqh"
 #include "../Data/IndicatorManager.mqh"
 
-#include "../Data/TradePackage.mqh"
+#include "../Data/TrendPackage.mqh"
 
 #include "../Data/MTFAnalyser.mqh"
 #include "../Data/POIModule.mqh"
@@ -21,7 +21,7 @@
 
 
 // ====================== DEBUG SETTINGS ======================
-bool DEBUG_ENABLED_PM = true;
+bool DEBUG_ENABLED_PM = false;
 
 void DebugLogPM(string context, string message) {
    if(DEBUG_ENABLED_PM) {
@@ -31,7 +31,7 @@ void DebugLogPM(string context, string message) {
 
 // ====================== PACKAGE MANAGER CLASS ======================
 
-class TradePackageManager
+class PackageManager
 {
 private:
     string m_symbol;
@@ -49,7 +49,7 @@ private:
     
     IndicatorManager* m_indicatorManager;
     
-    // Configuration for all 6 components (NO DUPLICATE WEIGHTS - weights only in TradePackage)
+    // Configuration for all 6 components (NO DUPLICATE WEIGHTS - weights only in TrendPackage)
     struct Config {
         // Module activation
         bool useMTF;
@@ -79,10 +79,6 @@ private:
         double minComponentScore;
         int minComponentsRequired;
         
-        // Display settings
-        bool displayOnChart;
-        bool useTabularFormat;
-        
         Config() {
             // Default: enable all 6 modules
             useMTF = true;
@@ -98,7 +94,7 @@ private:
             poiSensitivity = 2;
             volumeLookbackPeriod = 20;
             rsiLookbackPeriod = 14;
-            macdTimeframe = PERIOD_H1;
+            macdTimeframe = PERIOD_M15;
             candlePatternShift = 1;
             
             // Update settings
@@ -111,10 +107,6 @@ private:
             minOverallConfidence = 20.0;
             minComponentScore = 50.0;
             minComponentsRequired = 3;  // Need at least 3 of 6 components
-            
-            // Display settings
-            displayOnChart = true;
-            useTabularFormat = true;
         }
     } m_config;
     
@@ -173,12 +165,12 @@ private:
     } m_stats;
     
     // Cache
-    TradePackage m_currentPackage;
+    TrendPackage m_currentPackage;
     bool m_packageReady;
     
 public:
     // CONSTRUCTOR
-    TradePackageManager()
+    PackageManager()
     {
         m_symbol = "";
         m_primaryTF = PERIOD_CURRENT;
@@ -200,7 +192,7 @@ public:
     }
     
     // DESTRUCTOR
-    ~TradePackageManager()
+    ~PackageManager()
     {
         Deinitialize();
     }
@@ -383,18 +375,18 @@ public:
     
     // ==================== MAIN PACKAGE GENERATION ====================
     
-    TradePackage GenerateTradePackage(bool forceUpdate = false)
+    TrendPackage GenerateTrendPackage(bool forceUpdate = false)
     {
-        DebugLogPM("GenerateTradePackage", "=== GENERATING 6-COMPONENT TRADE PACKAGE ===");
+        DebugLogPM("GenerateTrendPackage", "=== GENERATING 6-COMPONENT TRADE PACKAGE ===");
         
         if(!m_initialized) {
-            DebugLogPM("GenerateTradePackage", "ERROR: Not initialized");
+            DebugLogPM("GenerateTrendPackage", "ERROR: Not initialized");
             return CreateErrorPackage("PackageManager not initialized");
         }
         
         // Check if we should update
         if(!ShouldUpdate(forceUpdate) && m_packageReady) {
-            DebugLogPM("GenerateTradePackage", "Using cached package");
+            DebugLogPM("GenerateTrendPackage", "Using cached package");
             return m_currentPackage;
         }
         
@@ -402,15 +394,12 @@ public:
         uint startTime = GetTickCount();
         
         // Create fresh package
-        TradePackage package;
+        TrendPackage package;
         package.signal.symbol = m_symbol;
         package.signal.timestamp = TimeCurrent();
         package.signal.signalSource = "6-Component PackageManager";
         
-        // Configure display
-        package.ConfigureDisplay(m_config.useTabularFormat, true, false, false);
-        
-        // Set default weights for 6 components (weights come from TradePackage class)
+        // Set default weights for 6 components (weights come from TrendPackage class)
         // Using default weights: MTF=25, POI=20, VOL=15, RSI=15, MACD=15, PAT=10
         package.SetComponentWeights(25.0, 20.0, 15.0, 15.0, 15.0, 10.0);
         
@@ -420,11 +409,11 @@ public:
         
         // 1. MTF Module
         if(m_config.useMTF && CheckPointer(m_mtfAnalyser) != POINTER_INVALID && m_mtfAnalyser.IsInitialized()) {
-            DebugLogPM("GenerateTradePackage", "Processing MTF Module...");
+            DebugLogPM("GenerateTrendPackage", "Processing MTF Module...");
             if(PopulateFromMTF(package)) {
                 modulesSuccessful++;
                 m_stats.UpdateComponentSuccess(0, true);
-                DebugLogPM("GenerateTradePackage", StringFormat("✓ MTF Score: %.1f", package.scores.mtfScore));
+                DebugLogPM("GenerateTrendPackage", StringFormat("✓ MTF Score: %.1f", package.scores.mtfScore));
             } else {
                 m_stats.UpdateComponentSuccess(0, false);
             }
@@ -432,11 +421,11 @@ public:
         
         // 2. POI Module
         if(m_config.usePOI && CheckPointer(m_poiModule) != POINTER_INVALID && m_poiModule.IsInitialized()) {
-            DebugLogPM("GenerateTradePackage", "Processing POI Module...");
+            DebugLogPM("GenerateTrendPackage", "Processing POI Module...");
             if(PopulateFromPOI(package)) {
                 modulesSuccessful++;
                 m_stats.UpdateComponentSuccess(1, true);
-                DebugLogPM("GenerateTradePackage", StringFormat("✓ POI Score: %.1f", package.scores.poiScore));
+                DebugLogPM("GenerateTrendPackage", StringFormat("✓ POI Score: %.1f", package.scores.poiScore));
             } else {
                 m_stats.UpdateComponentSuccess(1, false);
             }
@@ -444,11 +433,11 @@ public:
         
         // 3. Volume Module
         if(m_config.useVolume && CheckPointer(m_volumeModule) != POINTER_INVALID && m_volumeModule.IsInitialized()) {
-            DebugLogPM("GenerateTradePackage", "Processing Volume Module...");
+            DebugLogPM("GenerateTrendPackage", "Processing Volume Module...");
             if(PopulateFromVolume(package)) {
                 modulesSuccessful++;
                 m_stats.UpdateComponentSuccess(2, true);
-                DebugLogPM("GenerateTradePackage", StringFormat("✓ Volume Score: %.1f", package.scores.volumeScore));
+                DebugLogPM("GenerateTrendPackage", StringFormat("✓ Volume Score: %.1f", package.scores.volumeScore));
             } else {
                 m_stats.UpdateComponentSuccess(2, false);
             }
@@ -456,11 +445,11 @@ public:
         
         // 4. RSI Module
         if(m_config.useRSI && CheckPointer(m_rsiModule) != POINTER_INVALID) {
-            DebugLogPM("GenerateTradePackage", "Processing RSI Module...");
+            DebugLogPM("GenerateTrendPackage", "Processing RSI Module...");
             if(PopulateFromRSI(package)) {
                 modulesSuccessful++;
                 m_stats.UpdateComponentSuccess(3, true);
-                DebugLogPM("GenerateTradePackage", StringFormat("✓ RSI Score: %.1f", package.scores.rsiScore));
+                DebugLogPM("GenerateTrendPackage", StringFormat("✓ RSI Score: %.1f", package.scores.rsiScore));
             } else {
                 m_stats.UpdateComponentSuccess(3, false);
             }
@@ -468,11 +457,11 @@ public:
         
         // 5. MACD Module
         if(m_config.useMACD && CheckPointer(m_macdModule) != POINTER_INVALID && m_macdModule.IsInitialized()) {
-            DebugLogPM("GenerateTradePackage", "Processing MACD Module...");
+            DebugLogPM("GenerateTrendPackage", "Processing MACD Module...");
             if(PopulateFromMACD(package)) {
                 modulesSuccessful++;
                 m_stats.UpdateComponentSuccess(4, true);
-                DebugLogPM("GenerateTradePackage", StringFormat("✓ MACD Score: %.1f", package.scores.macdScore));
+                DebugLogPM("GenerateTrendPackage", StringFormat("✓ MACD Score: %.1f", package.scores.macdScore));
             } else {
                 m_stats.UpdateComponentSuccess(4, false);
             }
@@ -480,17 +469,17 @@ public:
         
         // 6. Candle Patterns Module
         if(m_config.useCandlePatterns && CheckPointer(m_candleAnalyzer) != POINTER_INVALID && m_candleAnalyzer.IsInitialized()) {
-            DebugLogPM("GenerateTradePackage", "Processing Candle Patterns Module...");
+            DebugLogPM("GenerateTrendPackage", "Processing Candle Patterns Module...");
             if(PopulateFromCandlePatterns(package)) {
                 modulesSuccessful++;
                 m_stats.UpdateComponentSuccess(5, true);
-                DebugLogPM("GenerateTradePackage", StringFormat("✓ Candle Score: %.1f", package.scores.patternScore));
+                DebugLogPM("GenerateTrendPackage", StringFormat("✓ Candle Score: %.1f", package.scores.patternScore));
             } else {
                 m_stats.UpdateComponentSuccess(5, false);
             }
         }
         
-        DebugLogPM("GenerateTradePackage", 
+        DebugLogPM("GenerateTrendPackage", 
             StringFormat("Modules successful: %d/%d", modulesSuccessful, m_stats.modulesActive));
         
         // ==================== FINAL CALCULATIONS ====================
@@ -502,7 +491,11 @@ public:
             // Determine dominant direction based on all components
             DetermineDominantDirection(package);
             
-            // Set final signal
+            // FIXED: Set final signal based on ALL components consensus
+            // NOT just based on MTF (which was causing the bug)
+            DetermineSignalFromAllComponents(package, modulesSuccessful);
+            
+            // Set confidence
             package.signal.confidence = package.overallConfidence;
             
             // Validate the package
@@ -528,35 +521,32 @@ public:
                                         processingTime) / m_stats.totalPackagesGenerated;
             m_stats.lastUpdateTime = TimeCurrent();
             
-            DebugLogPM("GenerateTradePackage", 
-                StringFormat("✓ Package generated: Valid=%s, Confidence=%.1f%%, Score=%.2f, Time=%d ms",
+            DebugLogPM("GenerateTrendPackage", 
+                StringFormat("✓ Package generated: Valid=%s, Signal=%s, Direction=%s, Confidence=%.1f%%, Score=%.2f, Time=%d ms",
                 package.isValid ? "YES" : "NO",
+                package.signal.GetSimpleSignal(),
+                package.directionAnalysis.dominantDirection,
                 package.overallConfidence,
                 package.weightedScore,
                 processingTime));
-            
-            // Display on chart if configured
-            if(m_config.displayOnChart && package.isValid) {
-                DisplayPackageOnChart(package);
-            }
             
         } else {
             package.isValid = false;
             package.validationMessage = StringFormat("Insufficient components: %d/%d required", 
                 modulesSuccessful, m_config.minComponentsRequired);
-            DebugLogPM("GenerateTradePackage", "✗ Insufficient components");
+            DebugLogPM("GenerateTrendPackage", "✗ Insufficient components");
         }
         
         package.analysisTime = TimeCurrent();
         
-        DebugLogPM("GenerateTradePackage", "=== GENERATION COMPLETE ===");
+        DebugLogPM("GenerateTrendPackage", "=== GENERATION COMPLETE ===");
         return package;
     }
     
     // ==================== INDIVIDUAL MODULE POPULATION METHODS ====================
     
 private:
-    bool PopulateFromMTF(TradePackage &package)
+    bool PopulateFromMTF(TrendPackage &package)
     {
         DebugLogPM("PopulateFromMTF", "Getting MTF data...");
         
@@ -574,7 +564,7 @@ private:
             mtfScore.score, mtfScore.weightedScore,
             mtfScore.bullishTFCount, mtfScore.bearishTFCount, mtfScore.neutralTFCount));
         
-        // Populate TradePackage using setter method
+        // Populate TrendPackage using setter method
         package.SetMTFData(
             mtfScore.score,              // score
             mtfScore.weightedScore,      // mtfWeightedScore
@@ -587,19 +577,8 @@ private:
             mtfScore.confidence          // confidence
         );
         
-        // Set initial signal from MTF (strongest component)
-        if(mtfScore.bullishWeightedScore > mtfScore.bearishWeightedScore) {
-            package.signal.orderType = ORDER_TYPE_BUY;
-            package.signal.reason = StringFormat("MTF bullish: %d/%d timeframes", 
-                mtfScore.bullishTFCount, mtfScore.bullishTFCount + mtfScore.bearishTFCount + mtfScore.neutralTFCount);
-        } else if(mtfScore.bearishWeightedScore > mtfScore.bullishWeightedScore) {
-            package.signal.orderType = ORDER_TYPE_SELL;
-            package.signal.reason = StringFormat("MTF bearish: %d/%d timeframes", 
-                mtfScore.bearishTFCount, mtfScore.bullishTFCount + mtfScore.bearishTFCount + mtfScore.neutralTFCount);
-        } else {
-            package.signal.orderType = ORDER_TYPE_BUY_LIMIT;
-            package.signal.reason = "MTF neutral";
-        }
+        // REMOVED THE BUG: We don't set signal here anymore
+        // Signal will be determined from ALL components in DetermineSignalFromAllComponents()
         
         // Update direction analysis with MTF confidence
         if(mtfScore.bullishWeightedScore > mtfScore.bearishWeightedScore) {
@@ -611,7 +590,7 @@ private:
         return true;
     }
     
-    bool PopulateFromPOI(TradePackage &package)
+    bool PopulateFromPOI(TrendPackage &package)
     {
     DebugLogPM("PopulateFromPOI", "Getting POI data...");
     
@@ -675,7 +654,7 @@ private:
         bias = "NEUTRAL";
     }
     
-    // Populate TradePackage with POI data using the setter
+    // Populate TrendPackage with POI data using the setter
     package.SetPOIData(
         poiSignal.overallBias,        // overallBias
         poiSignal.zoneBias,           // zoneBias
@@ -706,7 +685,7 @@ private:
     return true;
     }
     
-    bool PopulateFromVolume(TradePackage &package)
+    bool PopulateFromVolume(TrendPackage &package)
     {
     DebugLogPM("PopulateFromVolume", "Getting Volume data...");
     
@@ -732,7 +711,7 @@ private:
         direction = "NEUTRAL";
     }
     
-    // Populate TradePackage with volume data
+    // Populate TrendPackage with volume data
     package.SetVolumeData(
         volumeData.momentumScore,              // momentumScore
         volumeData.convictionScore,            // convictionScore
@@ -767,7 +746,7 @@ private:
     return true;
     }
     
-    bool PopulateFromRSI(TradePackage &package)
+    bool PopulateFromRSI(TrendPackage &package)
     {
         DebugLogPM("PopulateFromRSI", "Getting RSI data...");
         
@@ -790,7 +769,7 @@ private:
             direction = "NEUTRAL";
         }
         
-        // Populate TradePackage with RSI data
+        // Populate TrendPackage with RSI data
         package.SetRSIData(
             rsiBias.bullishBias,    // bullishBias
             rsiBias.bearishBias,    // bearishBias
@@ -815,7 +794,7 @@ private:
         return true;
     }
     
-    bool PopulateFromMACD(TradePackage &package)
+    bool PopulateFromMACD(TrendPackage &package)
     {
         DebugLogPM("PopulateFromMACD", "Getting MACD data...");
         
@@ -848,7 +827,7 @@ private:
             default: signalTypeStr = "NONE"; break;
         }
         
-        // Populate TradePackage with MACD data
+        // Populate TrendPackage with MACD data
         package.SetMACDData(
             direction,                    // biasString
             macdSignal.score,            // score
@@ -878,7 +857,7 @@ private:
         return true;
     }
     
-    bool PopulateFromCandlePatterns(TradePackage &package)
+    bool PopulateFromCandlePatterns(TrendPackage &package)
     {
         DebugLogPM("PopulateFromCandlePatterns", "Getting Candle Patterns data...");
         
@@ -897,7 +876,7 @@ private:
         // Get pattern name from enum - FIXED
         string patternName = GetPatternDescription(patternResult.pattern);
         
-        // Populate TradePackage with pattern data - FIXED
+        // Populate TrendPackage with pattern data - FIXED
         package.SetPatternData(
             patternName,                 // patternName (converted from enum)
             direction,                   // direction
@@ -931,7 +910,7 @@ private:
     
     // ==================== HELPER METHODS ====================
     
-    void DetermineDominantDirection(TradePackage &package)
+    void DetermineDominantDirection(TrendPackage &package)
     {
         // Normalize direction confidence to sum to 100
         double totalDirection = package.directionAnalysis.bullishConfidence + 
@@ -973,6 +952,51 @@ private:
             package.directionAnalysis.isConflict ? "YES" : "NO"));
     }
     
+    // NEW METHOD: Determine signal based on ALL components consensus
+    void DetermineSignalFromAllComponents(TrendPackage &package, int modulesSuccessful)
+    {
+        DebugLogPM("DetermineSignalFromAllComponents", 
+            StringFormat("Determining signal from %d components. Direction: %s, B:%.1f%%, S:%.1f%%",
+            modulesSuccessful,
+            package.directionAnalysis.dominantDirection,
+            package.directionAnalysis.bullishConfidence,
+            package.directionAnalysis.bearishConfidence));
+        
+        // Use dominant direction from ALL components (not just MTF)
+        if(package.directionAnalysis.dominantDirection == "BULLISH") {
+            package.signal.orderType = ORDER_TYPE_BUY;
+            package.signal.reason = StringFormat("BULLISH consensus from %d components: B:%.1f%% > S:%.1f%%", 
+                modulesSuccessful,
+                package.directionAnalysis.bullishConfidence,
+                package.directionAnalysis.bearishConfidence);
+            DebugLogPM("DetermineSignalFromAllComponents", "✓ Signal: BUY (BULLISH consensus)");
+            
+        } else if(package.directionAnalysis.dominantDirection == "BEARISH") {
+            package.signal.orderType = ORDER_TYPE_SELL;
+            package.signal.reason = StringFormat("BEARISH consensus from %d components: S:%.1f%% > B:%.1f%%", 
+                modulesSuccessful,
+                package.directionAnalysis.bearishConfidence,
+                package.directionAnalysis.bullishConfidence);
+            DebugLogPM("DetermineSignalFromAllComponents", "✓ Signal: SELL (BEARISH consensus)");
+            
+        } else {
+            // NEUTRAL or CONFLICT - default to HOLD (no signal)
+            package.signal.orderType = ORDER_TYPE_BUY_LIMIT; // This means "no signal" in your system
+            package.signal.reason = StringFormat("NEUTRAL/NO CLEAR DIRECTION from %d components: B:%.1f%%, S:%.1f%%, N:%.1f%%", 
+                modulesSuccessful,
+                package.directionAnalysis.bullishConfidence,
+                package.directionAnalysis.bearishConfidence,
+                package.directionAnalysis.neutralConfidence);
+            DebugLogPM("DetermineSignalFromAllComponents", "✓ Signal: HOLD (No clear direction)");
+        }
+        
+        // Log the final decision
+        DebugLogPM("DetermineSignalFromAllComponents", 
+            StringFormat("Final Signal: %s, Reason: %s",
+                package.signal.GetSimpleSignal(),
+                package.signal.reason));
+    }
+    
     bool ShouldUpdate(bool forceUpdate)
     {
         if(forceUpdate) return true;
@@ -995,9 +1019,9 @@ private:
         return false;
     }
     
-    TradePackage CreateErrorPackage(string errorMessage)
+    TrendPackage CreateErrorPackage(string errorMessage)
     {
-        TradePackage errorPackage;
+        TrendPackage errorPackage;
         errorPackage.isValid = false;
         errorPackage.validationMessage = errorMessage;
         errorPackage.signal.symbol = m_symbol;
@@ -1005,40 +1029,19 @@ private:
         return errorPackage;
     }
     
-    void DisplayPackageOnChart(const TradePackage &package) {
-        if(!m_config.displayOnChart || !package.isValid) return;
-        
-        // Use the detailed tabular display
-        string displayText = package.GenerateDetailedTabularDisplay();
-        
-        // Create or update chart object
-        string objName = "PackageManager_Display_" + m_symbol;
-        if(ObjectFind(0, objName) < 0) {
-            ObjectCreate(0, objName, OBJ_LABEL, 0, 0, 0);
-        }
-        
-        ObjectSetString(0, objName, OBJPROP_TEXT, displayText);
-        ObjectSetInteger(0, objName, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
-        ObjectSetInteger(0, objName, OBJPROP_XDISTANCE, 10);
-        ObjectSetInteger(0, objName, OBJPROP_YDISTANCE, 20);
-        ObjectSetInteger(0, objName, OBJPROP_COLOR, clrWhite);
-        ObjectSetInteger(0, objName, OBJPROP_BACK, false);
-        ObjectSetInteger(0, objName, OBJPROP_FONTSIZE, 8);
-    }
-    
 public:
     // ==================== PUBLIC INTERFACE ====================
     
-    TradePackage GetTradePackage(bool forceUpdate = false)
+    TrendPackage GetTrendPackage(bool forceUpdate = false)
     {
         if(!m_initialized) {
             return CreateErrorPackage("Not initialized");
         }
         
-        return GenerateTradePackage(forceUpdate);
+        return GenerateTrendPackage(forceUpdate);
     }
     
-    TradePackage GetCurrentPackage()
+    TrendPackage GetCurrentPackage()
     {
         if(!m_initialized || !m_packageReady) {
             return CreateErrorPackage("No package available");
@@ -1059,7 +1062,7 @@ public:
     void ForceUpdate()
     {
         if(m_initialized) {
-            m_currentPackage = GenerateTradePackage(true);
+            m_currentPackage = GenerateTrendPackage(true);
         }
     }
     
@@ -1087,7 +1090,7 @@ public:
     
     void ConfigureModuleSettings(bool mtfUse89EMA = true, bool poiDraw = false, int poiSens = 2,
                                 int volumePeriod = 20, int rsiPeriod = 14, 
-                                ENUM_TIMEFRAMES macdTF = PERIOD_H1, int candleShift = 1)
+                                ENUM_TIMEFRAMES macdTF = PERIOD_M15, int candleShift = 1)
     {
         m_config.mtfUse89EMAFilter = mtfUse89EMA;
         m_config.poiDrawOnChart = poiDraw;
@@ -1129,16 +1132,6 @@ public:
         DebugLogPM("ConfigureValidation", 
             StringFormat("Validation: MinConf=%.1f%%, MinScore=%.1f, MinComps=%d",
             minConfidence, minScore, minComponents));
-    }
-    
-    void ConfigureDisplay(bool displayChart = true, bool tabularFormat = true)
-    {
-        m_config.displayOnChart = displayChart;
-        m_config.useTabularFormat = tabularFormat;
-        
-        DebugLogPM("ConfigureDisplay", 
-            StringFormat("Display: Chart=%s, Format=%s",
-            displayChart ? "ON" : "OFF", tabularFormat ? "TABULAR" : "FREE"));
     }
     
     // ==================== STATUS & INFORMATION ====================
@@ -1233,35 +1226,5 @@ public:
         if(m_config.updateOnTimer) {
             ForceUpdate();
         }
-    }
-    
-    // ==================== DISPLAY METHODS ====================
-    
-    // Display the current package with all 6 component details
-    void DisplayCurrentPackage() {
-        DebugLogPM("DisplayCurrentPackage", "Displaying current package details");
-        
-        if(!m_initialized || !m_packageReady) {
-            DebugLogPM("DisplayCurrentPackage", "No valid package available");
-            Logger::DisplaySingleFrame("No valid package available");
-            return;
-        }
-        
-        // Generate detailed display
-        string display = m_currentPackage.GenerateDetailedTabularDisplay();
-        
-        // Display it using Logger
-        Logger::DisplaySingleFrame(display);
-        
-        DebugLogPM("DisplayCurrentPackage", "Package displayed successfully");
-    }
-    
-    // Get package display as string (for printing or logging)
-    string GetCurrentPackageDisplay() {
-        if(!m_initialized || !m_packageReady) {
-            return "No valid package available";
-        }
-        
-        return m_currentPackage.GenerateDetailedTabularDisplay();
     }
 };

@@ -2,6 +2,7 @@
 
 
 
+place settings on the top of the file
 
 
 ++++++++++++++++++++++
@@ -53,6 +54,8 @@ FOR UTILS PLEASE PREFER MY FILES AND FUNCITONS:
 all utils are static files with static functions only, no classes.
 use as static functions only.
 prefer this for all your utils needs to avoid redundance.
+
+these are the functions in all my utils files
 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 consider mathutils
 ++++++++++++++++++++++
@@ -1135,614 +1138,2943 @@ TradePackage.ProcessAndExecute() → DecisionEngine → Trade Execution
 
 
 
-To call the existing `GenerateDetailedTabularDisplay()` function from `TradePackage` and a similar display function from your Decision Engine (I'll assume it exists), you need to expose them through a public interface. Here's how to do it:
-
-## 1. First, let me see what you have in Decision Engine (you mentioned `DisplayDecisionEngineView`)
-
-Since I don't have your Decision Engine code, I'll show you two approaches:
-
-## Approach 1: Simple Method Calls (If you have instance access)
-
-### In your main EA, if you have instances:
-```mql4
-// Main EA
-
-// Assuming you have these instances somewhere
-TradePackage tradePackage;
-// DecisionEngine decisionEngine; // Your decision engine instance
-
-// Call the display functions
-void DisplayTradePackage() {
-    string displayText = tradePackage.GenerateDetailedTabularDisplay();
-    Logger::DisplaySingleFrame(displayText);
-}
-
-void DisplayDecisionEngine() {
-    // If you have a method in DecisionEngine like:
-    // decisionEngine.DisplayDecisionEngineView();
-    // or if it's a static method:
-    // DecisionEngine::DisplayDecisionEngineView();
-}
-```
-
-## Approach 2: Create a Display Manager Interface (Recommended)
-
-Create a simple interface class to manage all displays:
-
-```mql4
-// DisplayManager.mqh
-#include "Data/TradePackage.mqh"
-// #include "DecisionEngine.mqh" // Include your decision engine
-
-class DisplayManager {
-public:
-    // Method to display TradePackage
-    static void DisplayTradePackage(const TradePackage &package) {
-        string displayText = package.GenerateDetailedTabularDisplay();
-        Logger::DisplaySingleFrame(displayText);
-    }
-    
-    // Method to display Decision Engine view
-    static void DisplayDecisionEngineView() {
-        // Option A: If you have a static method
-        // DecisionEngine::DisplayDecisionEngineView();
-        
-        // Option B: If you need an instance
-        // DecisionEngine engine;
-        // engine.DisplayView();
-        
-        // Option C: If you need to pass parameters
-        // DecisionEngine::DisplayView("EURUSD", PERIOD_H1);
-    }
-    
-    // Combined display
-    static void DisplayAll(const TradePackage &package) {
-        DisplayTradePackage(package);
-        DisplayDecisionEngineView();
-    }
-};
-```
-
-## Approach 3: Direct Call in OnTick() or OnTimer()
-
-In your main EA's event handlers:
-
-```mql4
-// Main EA (Example)
-#include "Data/TradePackage.mqh"
-#include "Utils/DisplayManager.mqh" // If using Approach 2
-
-// Global/class member
-TradePackage g_tradePackage;
-
-// In OnTick() or a timer function
-void OnTick() {
-    // Your trading logic...
-    
-    // Display when needed (e.g., on button press or condition)
-    if(ShouldDisplay()) {
-        // Direct call
-        string tpDisplay = g_tradePackage.GenerateDetailedTabularDisplay();
-        Logger::DisplaySingleFrame(tpDisplay);
-        
-        // Or using DisplayManager
-        DisplayManager::DisplayTradePackage(g_tradePackage);
-    }
-}
-
-// Or create a custom function
-void ShowCurrentAnalysis() {
-    // 1. Display Trade Package
-    string tpText = g_tradePackage.GenerateDetailedTabularDisplay();
-    Logger::DisplaySingleFrame("=== TRADE PACKAGE ===");
-    Logger::DisplaySingleFrame(tpText);
-    
-    // 2. Display Decision Engine View
-    // This depends on how your DecisionEngine is structured
-    // If it has a static method:
-    // DecisionEngine::DisplayDecisionEngineView();
-    
-    // If it's an instance:
-    // if(g_decisionEngine != NULL) {
-    //     g_decisionEngine.DisplayView();
-    // }
-}
-```
-
-## Approach 4: Event-Driven Display
-
-Add keyboard shortcuts or chart events:
-
-```mql4
-// In OnChartEvent()
-void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam) {
-    if(id == CHARTEVENT_KEYDOWN) {
-        // F2 key to display Trade Package
-        if(lparam == 113) { // F2 key code
-            DisplayTradePackageNow();
-        }
-        // F3 key to display Decision Engine
-        else if(lparam == 114) { // F3 key code
-            DisplayDecisionEngineNow();
-        }
-    }
-}
-
-void DisplayTradePackageNow() {
-    TradePackage currentPackage; // Or use your existing instance
-    // Populate with current data...
-    string display = currentPackage.GenerateDetailedTabularDisplay();
-    Comment(display); // Or use your Logger
-}
-
-void DisplayDecisionEngineNow() {
-    // Call your decision engine display method
-}
-```
-
-## Quick Solution for TradePackage:
-
-Since you already have the working `GenerateDetailedTabularDisplay()` method in `TradePackage`, you can simply:
-
-1. **Make sure the method is public** (it is, since it's in the class definition)
-2. **Create a TradePackage instance** in your main EA
-3. **Populate it with data** (from your modules)
-4. **Call the method** when needed
-
-```mql4
-// Minimal working example in main EA:
-#include <Data/TradePackage.mqh>
-
-TradePackage g_currentPackage;
-
-void UpdateAndDisplayPackage() {
-    // 1. Update package with current data (from your modules)
-    g_currentPackage.SetMTFData(...);
-    g_currentPackage.SetPOIData(...);
-    // ... set other data
-    
-    // 2. Calculate and validate
-    g_currentPackage.CalculateDirectionAnalysis();
-    g_currentPackage.CalculateWeightedScore();
-    g_currentPackage.ValidatePackage();
-    
-    // 3. Display
-    string display = g_currentPackage.GenerateDetailedTabularDisplay();
-    Logger::DisplaySingleFrame(display);
-}
-```
-
-## For Decision Engine:
-
-You need to check what method is available. If you don't have `DisplayDecisionEngineView()`, look for similar display methods like:
-- `Display()`
-- `ShowView()`
-- `GenerateDisplay()`
-- `GetDisplayText()`
-
-## Summary:
-
-1. **TradePackage**: Already has `GenerateDetailedTabularDisplay()` - just call it on an instance
-2. **Decision Engine**: Need to check the exact method name and how to call it
-3. **Integration**: Either call directly or create a DisplayManager helper class
-
-**Which approach do you prefer?** If you can show me your Decision Engine class definition, I can give you the exact code to call its display method.
 
 
-+++++++++++++++++++++++++++++++++++++++++++
 
-could you clear all displays here and call them directly in the most simple way
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 //+------------------------------------------------------------------+
-//|                           mk$.mq5                                |
-//|                    Enhanced Trading EA with 6-Component Analysis |
+//|                                              MarketRegime.mqh    |
+//|           Advanced Market Regime & Lifecycle Detection System   |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024"
-#property link      "yourwebsite.com"
-#property version   "3.00"
+#property version "1.00"
 #property strict
 
-// ====================== DEBUG SETTINGS ======================
-bool DEBUG_ENABLED_EA = true;
+#include <Math\Stat\Math.mqh>
+#include <ChartObjects\ChartObjectsLines.mqh>
+#include <ChartObjects\ChartObjectsShapes.mqh>
+#include <ChartObjects\ChartObjectsTxtControls.mqh>
 
-void DebugLogEA(string context, string message) {
-   if(DEBUG_ENABLED_EA) Logger::Log("DEBUG-EA-" + context, message, true, true);
-}
-
-// ============================================================
-// INCLUDES
-// ============================================================
-#include "include/Utils/Logger.mqh"
-#include "include/Data/IndicatorManager.mqh"
-#include "include/Core/DecisionEngine.mqh"
-#include "include/Data/POIModule.mqh"
-#include "include/Core/PackageManager.mqh"
-
-// ============================================================
-// INPUT PARAMETERS
-// ============================================================
-input int TimerInterval = 5;
-input bool POI_Enabled = true;
-
-// Package Manager Configuration
-input bool UseMTFModule = true;
-input bool UsePOIModule = true;
-input bool UseVolumeModule = true;
-input bool UseRSIModule = true;
-input bool UseMACDModule = true;
-input bool UseCandlePatternsModule = true;
-
-input int PackageUpdateInterval = 10;
-
-// Decision Engine Configuration
-input bool UseDecisionEngine = true;
-input double MaxRiskPerTrade = 1.0;
-input int PositionCooldownMinutes = 30;
-input bool UseAutoExecution = true;
-
-// ============================================================
-// GLOBAL DECLARATIONS
-// ============================================================
-IndicatorManager* g_indicatorManager = NULL;
-DecisionEngine decisionEngine;
-POIModule poiModule;
-TradePackageManager* g_packageManager = NULL;
-
-// ============================================================
-// DISPLAY TOGGLE SYSTEM (NUMBER KEYS 0-9)
-// ============================================================
-
-enum DISPLAY_MODE {
-    DISPLAY_NONE = 0,
-    DISPLAY_DECISION_ENGINE_ONLY = 1,
-    DISPLAY_TRADE_PACKAGE_ONLY = 2,
-    DISPLAY_COMPONENTS_VIEW = 3,
-    DISPLAY_DECISION_ENGINE_VIEW = 4,
-    DISPLAY_COMBINED_VIEW = 5,
-    DISPLAY_TRADE_PACKAGE_TABULAR = 6,
-    DISPLAY_TRADE_PACKAGE_DETAILED = 7,
-    DISPLAY_POI = 8,
-    DISPLAY_ALL_MODULES = 9
+//+------------------------------------------------------------------+
+//| Market Regime Types                                             |
+//+------------------------------------------------------------------+
+enum ENUM_MARKET_REGIME
+{
+    REGIME_TRENDING_UP,   // Strong uptrend
+    REGIME_TRENDING_DOWN, // Strong downtrend
+    REGIME_RANGING,       // Sideways/consolidation
+    REGIME_UNKNOWN        // Unable to determine
 };
 
-DISPLAY_MODE g_currentDisplay = DISPLAY_NONE;
+//+------------------------------------------------------------------+
+//| Market Lifecycle States                                         |
+//+------------------------------------------------------------------+
+enum ENUM_MARKET_LIFECYCLE
+{
+    LIFECYCLE_RANGE_FORMING,     // Consolidation forming (needs validation)
+    LIFECYCLE_RANGE_ACTIVE,      // Validated range/consolidation
+    LIFECYCLE_BREAKOUT_DETECTED, // Range broken, initial breakout
+    LIFECYCLE_TREND_CONFIRMED,   // Breakout confirmed, trend established
+    LIFECYCLE_PULLBACK_FORMING,  // Trend pullback forming
+    LIFECYCLE_PULLBACK_ACTIVE,   // Validated pullback range
+    LIFECYCLE_TREND_RESUMING,    // Pullback broken, trend resuming
+    LIFECYCLE_TREND_WEAKENING,   // Trend losing momentum
+    LIFECYCLE_UNKNOWN
+};
 
-// ============================================================
-// CHART EVENT HANDLER FOR KEYBOARD SHORTCUTS
-// ============================================================
-void OnChartEvent(const int id, const long& lparam, const double& dparam, const string& sparam) {
-    // Handle keyboard events
-    if(id == CHARTEVENT_KEYDOWN) {  // Use CHARTEVENT_KEYDOWN instead of CHART_EVENT_KEYDOWN
-        int keyCode = (int)lparam;
-        
-        // Handle number keys 0-9
-        if(keyCode >= '0' && keyCode <= '9') {
-            int displayNum = keyCode - '0';
-            g_currentDisplay = (DISPLAY_MODE)displayNum;
-            
-            // Update display immediately
-            UpdateDisplay();
-            
-            PrintFormat("Display mode changed to: %d", displayNum);
+//+------------------------------------------------------------------+
+//| Regime Detection Result                                         |
+//+------------------------------------------------------------------+
+struct RegimeResult
+{
+    ENUM_MARKET_REGIME regime; // Primary regime classification
+    double confidence;         // 0-100% confidence in detection
+    double trendStrength;      // -100 to +100 (negative=bearish, positive=bullish)
+    double rangeStrength;      // 0-100 strength of ranging conditions
+    string description;        // Human-readable description
+
+    // Constructor
+    RegimeResult()
+    {
+        regime = REGIME_UNKNOWN;
+        confidence = 0.0;
+        trendStrength = 0.0;
+        rangeStrength = 0.0;
+        description = "Not analyzed";
+    }
+
+    // String representation
+    string ToString() const
+    {
+        string regimeStr;
+        switch (regime)
+        {
+        case REGIME_TRENDING_UP:
+            regimeStr = "TRENDING_UP";
+            break;
+        case REGIME_TRENDING_DOWN:
+            regimeStr = "TRENDING_DOWN";
+            break;
+        case REGIME_RANGING:
+            regimeStr = "RANGING";
+            break;
+        default:
+            regimeStr = "UNKNOWN";
+            break;
+        }
+
+        return StringFormat("%s (%.0f%%) | Trend: %.1f | Range: %.1f | %s",
+                            regimeStr, confidence, trendStrength, rangeStrength, description);
+    }
+
+    // Quick helper methods
+    bool IsTrending() const { return regime == REGIME_TRENDING_UP || regime == REGIME_TRENDING_DOWN; }
+    bool IsRanging() const { return regime == REGIME_RANGING; }
+    bool IsUpTrend() const { return regime == REGIME_TRENDING_UP; }
+    bool IsDownTrend() const { return regime == REGIME_TRENDING_DOWN; }
+};
+
+//+------------------------------------------------------------------+
+//| Lifecycle State Structure                                       |
+//+------------------------------------------------------------------+
+struct LifecycleState
+{
+    ENUM_MARKET_LIFECYCLE state;
+    datetime startTime;
+    int durationBars;
+    string description;
+
+    LifecycleState()
+    {
+        state = LIFECYCLE_UNKNOWN;
+        startTime = 0;
+        durationBars = 0;
+        description = "Initial state";
+    }
+
+    string ToString() const
+    {
+        return StringFormat("%s | Started: %s | Bars: %d | %s",
+                            GetStateString(state),
+                            TimeToString(startTime, TIME_DATE | TIME_MINUTES),
+                            durationBars,
+                            description);
+    }
+
+    static string GetStateString(ENUM_MARKET_LIFECYCLE s)
+    {
+        switch (s)
+        {
+        case LIFECYCLE_RANGE_FORMING:
+            return "RANGE_FORMING";
+        case LIFECYCLE_RANGE_ACTIVE:
+            return "RANGE_ACTIVE";
+        case LIFECYCLE_BREAKOUT_DETECTED:
+            return "BREAKOUT_DETECTED";
+        case LIFECYCLE_TREND_CONFIRMED:
+            return "TREND_CONFIRMED";
+        case LIFECYCLE_PULLBACK_FORMING:
+            return "PULLBACK_FORMING";
+        case LIFECYCLE_PULLBACK_ACTIVE:
+            return "PULLBACK_ACTIVE";
+        case LIFECYCLE_TREND_RESUMING:
+            return "TREND_RESUMING";
+        case LIFECYCLE_TREND_WEAKENING:
+            return "TREND_WEAKENING";
+        default:
+            return "UNKNOWN";
         }
     }
-}
+};
 
-// ============================================================
-// SIMPLE DISPLAY UPDATER - CALLS EXISTING FUNCTIONS
-// ============================================================
-void UpdateDisplay() {
-    // DO NOT clear comment here - let the functions handle it
-    
-    switch(g_currentDisplay) {
-        case DISPLAY_NONE:
-            Comment("");  // Clear only for NONE mode
-            return;
-            
-        case DISPLAY_DECISION_ENGINE_ONLY:
-            decisionEngine.DisplayDecisionEngineOnly();
-            break;
-            
-        case DISPLAY_TRADE_PACKAGE_ONLY:
-            if(g_packageManager != NULL && g_packageManager.IsInitialized()) {
-                TradePackage package = g_packageManager.GetTradePackage(false);
-                package.Display();
-            }
-            break;
-            
-        case DISPLAY_COMPONENTS_VIEW:
-            decisionEngine.DisplayComponentsView();
-            break;
-            
-        case DISPLAY_DECISION_ENGINE_VIEW:
-            decisionEngine.DisplayDecisionEngineView();
-            break;
-            
-        case DISPLAY_COMBINED_VIEW:
-            decisionEngine.DisplayCombinedView();
-            break;
-            
-        case DISPLAY_TRADE_PACKAGE_TABULAR:
-            if(g_packageManager != NULL && g_packageManager.IsInitialized()) {
-                TradePackage package = g_packageManager.GetTradePackage(false);
-                package.DisplayTabular();
-            }
-            break;
-            
-        case DISPLAY_TRADE_PACKAGE_DETAILED:
-            if(g_packageManager != NULL && g_packageManager.IsInitialized()) {
-                TradePackage package = g_packageManager.GetTradePackage(false);
-                package.DisplayDetailedTabular();
-            }
-            break;
-            
-        case DISPLAY_POI:
-            // Simple POI display
-            if(POI_Enabled) {
-                string display = "=== POI MODULE ===\n";
-                display += "Status: ACTIVE\n";
-                display += "Symbol: " + Symbol() + "\n";
-                display += "Time: " + TimeToString(TimeCurrent(), TIME_SECONDS) + "\n";
-                display += "\nPress 0 to clear, 1-9 for other views";
-                Comment(display);
-            } else {
-                Comment("POI Module: DISABLED\nEnable in inputs\nPress 0-9 to switch views");
-            }
-            break;
-            
-        case DISPLAY_ALL_MODULES:
+//+------------------------------------------------------------------+
+//| Range Information Structure                                     |
+//+------------------------------------------------------------------+
+struct RangeInfo
+{
+    double top;
+    double bottom;
+    double widthPct;
+    datetime startTime;
+    int touchCount;
+    bool validated;
+    int barsSinceFormation;
+    double currentPosition; // 0-100% where price is within range (NEW)
+
+    // Default constructor
+    RangeInfo()
+    {
+        top = 0.0;
+        bottom = 0.0;
+        widthPct = 0.0;
+        startTime = 0;
+        touchCount = 0;
+        validated = false;
+        barsSinceFormation = 0;
+        currentPosition = 50.0; // Default to middle
+    }
+
+    // Copy constructor
+    RangeInfo(const RangeInfo &other)
+    {
+        this = other;
+    }
+
+    // Assignment operator
+    void operator=(const RangeInfo &other)
+    {
+        top = other.top;
+        bottom = other.bottom;
+        widthPct = other.widthPct;
+        startTime = other.startTime;
+        touchCount = other.touchCount;
+        validated = other.validated;
+        barsSinceFormation = other.barsSinceFormation;
+        currentPosition = other.currentPosition;
+    }
+
+    bool IsValid() const { return top > bottom && widthPct > 0.1; }
+
+    bool IsPriceInside(double price) const
+    {
+        return price >= bottom && price <= top;
+    }
+
+    bool IsPriceAbove(double price) const
+    {
+        return price > top;
+    }
+
+    bool IsPriceBelow(double price) const
+    {
+        return price < bottom;
+    }
+
+    // NEW: Calculate where price is within the range (0-100%)
+    double CalculatePosition(double price) const
+    {
+        if (!IsValid())
+            return 50.0;
+
+        if (price >= top)
+            return 100.0;
+        if (price <= bottom)
+            return 0.0;
+
+        return ((price - bottom) / (top - bottom)) * 100.0;
+    }
+
+    string ToString() const
+    {
+        return StringFormat("Range: %.5f-%.5f (%.2f%%) | Pos: %.1f%% | Touches: %d | Valid: %s",
+                            bottom, top, widthPct, currentPosition, touchCount, validated ? "Yes" : "No");
+    }
+};
+
+//+------------------------------------------------------------------+
+//| Trend Information Structure                                     |
+//+------------------------------------------------------------------+
+struct TrendInfo
+{
+    ENUM_MARKET_REGIME direction;
+    double startPrice;
+    datetime startTime;
+    double strongestPoint;
+    double currentPrice;
+    int trendBars;
+    double totalMovePct;
+
+    TrendInfo()
+    {
+        direction = REGIME_UNKNOWN;
+        startPrice = 0.0;
+        startTime = 0;
+        strongestPoint = 0.0;
+        currentPrice = 0.0;
+        trendBars = 0;
+        totalMovePct = 0.0;
+    }
+
+    void Update(double price)
+    {
+        currentPrice = price;
+        trendBars++;
+
+        if (direction == REGIME_TRENDING_UP)
+        {
+            strongestPoint = MathMax(strongestPoint, price);
+            totalMovePct = ((price - startPrice) / startPrice) * 100.0;
+        }
+        else if (direction == REGIME_TRENDING_DOWN)
+        {
+            strongestPoint = MathMin(strongestPoint, price);
+            totalMovePct = ((startPrice - price) / startPrice) * 100.0;
+        }
+    }
+
+    double GetCurrentRetracementPct() const
+    {
+        if (direction == REGIME_TRENDING_UP)
+        {
+            double highest = MathMax(startPrice, strongestPoint);
+            double denominator = (highest - startPrice);
+
+            // FIX: Check for zero denominator
+            if (MathAbs(denominator) < 0.00001) // Use a small epsilon instead of exact zero
+                return 0.0;
+
+            return ((highest - currentPrice) / denominator) * 100.0;
+        }
+        else if (direction == REGIME_TRENDING_DOWN)
+        {
+            double lowest = MathMin(startPrice, strongestPoint);
+            double denominator = (startPrice - lowest);
+
+            // FIX: Check for zero denominator
+            if (MathAbs(denominator) < 0.00001) // Use a small epsilon instead of exact zero
+                return 0.0;
+
+            return ((currentPrice - lowest) / denominator) * 100.0;
+        }
+        return 0.0;
+    }
+
+    bool IsRetracementSignificant(double threshold = 20.0) const
+    {
+        return GetCurrentRetracementPct() > threshold;
+    }
+
+    string ToString() const
+    {
+        string dirStr = (direction == REGIME_TRENDING_UP) ? "UP" : (direction == REGIME_TRENDING_DOWN) ? "DOWN"
+                                                                                                       : "NONE";
+        return StringFormat("Trend %s | Start: %.5f | Move: %.2f%% | Retrace: %.1f%%",
+                            dirStr, startPrice, totalMovePct, GetCurrentRetracementPct());
+    }
+};
+
+//+------------------------------------------------------------------+
+//| Market Regime Detection Class                                   |
+//+------------------------------------------------------------------+
+class MarketRegimeDetector
+{
+private:
+    string m_symbol;
+    ENUM_TIMEFRAMES m_timeframe;
+    int m_lookbackPeriod;
+
+    // Detection parameters
+    double m_adxTrendThreshold;
+    double m_adxRangeThreshold;
+    double m_slopeThreshold;
+    double m_atrRatioThreshold;
+    double m_stdDevThreshold;
+
+public:
+    // Constructor
+    MarketRegimeDetector(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_H1)
+    {
+        m_symbol = (symbol == NULL) ? Symbol() : symbol;
+        m_timeframe = tf;
+        m_lookbackPeriod = 24; // 24 bars default
+
+        // Default thresholds (optimize these for your trading style)
+        m_adxTrendThreshold = 25.0; // ADX above 25 = trending
+        m_adxRangeThreshold = 20.0; // ADX below 20 = ranging
+        m_slopeThreshold = 0.04;    // % slope per bar for trend was 0.08
+        m_atrRatioThreshold = 1.1;  // Price change / ATR ratio was 2.5
+        m_stdDevThreshold = 80.0;   // % of prices inside 2 std dev bands was 70
+    }
+
+    //+------------------------------------------------------------------+
+    //| MAIN REGIME DETECTION FUNCTION                                 |
+    //+------------------------------------------------------------------+
+    RegimeResult DetectRegime()
+    {
+        RegimeResult result;
+
+        // 1. Calculate all mathematical indicators
+        double adxValue = CalculateADX();
+        double slope = CalculateLinearRegressionSlope();
+        double priceChangeRatio = CalculatePriceChangeATRRatio();
+        double stdDevScore = CalculateStdDevContainment();
+        double rangeTouches = CalculateRangeTouches();
+        double netPriceChange = CalculateNetPriceChange();
+
+        // 2. Calculate trend strength (-100 to +100)
+        result.trendStrength = CalculateTrendStrength(adxValue, slope, priceChangeRatio, netPriceChange);
+
+        // 3. Calculate range strength (0 to 100)
+        result.rangeStrength = CalculateRangeStrength(adxValue, stdDevScore, rangeTouches, netPriceChange);
+
+        // 4. Apply decision rules
+        result = ApplyDecisionRules(result, adxValue, slope, stdDevScore, priceChangeRatio, rangeTouches);
+
+        // 5. Set description
+        result.description = GenerateDescription(result, adxValue, slope);
+
+        return result;
+    }
+
+    //+------------------------------------------------------------------+
+    //| TREND STRENGTH CALCULATION                                      |
+    //+------------------------------------------------------------------+
+    double CalculateTrendStrength(double adx, double slope, double priceChangeRatio, double netChange)
+    {
+        double strength = 0.0;
+
+        // 1. Slope direction (primary)
+        if (MathAbs(slope) > m_slopeThreshold)
+        {
+            strength = (slope > 0) ? 60.0 : -60.0;
+        }
+
+        // 2. ADX confirmation
+        if (adx > m_adxTrendThreshold)
+        {
+            double adxFactor = MathMin(1.0, (adx - m_adxTrendThreshold) / 20.0);
+            strength *= (1.0 + adxFactor * 0.5);
+        }
+        else if (adx < m_adxRangeThreshold)
+        {
+            // Reduce trend strength if ADX is low
+            strength *= 0.7;
+        }
+
+        // 3. Price change to ATR ratio
+        if (priceChangeRatio > m_atrRatioThreshold)
+        {
+            strength *= (1.0 + (priceChangeRatio - m_atrRatioThreshold) * 0.3);
+        }
+
+        // 4. Net price change adjustment
+        if (MathAbs(netChange) > 1.0)
+        {
+            strength *= (1.0 + MathAbs(netChange) * 0.1);
+        }
+
+        // Cap between -100 and +100
+        if (strength > 100.0)
+            strength = 100.0;
+        if (strength < -100.0)
+            strength = -100.0;
+
+        return strength;
+    }
+
+    //+------------------------------------------------------------------+
+    //| RANGE STRENGTH CALCULATION                                      |
+    //+------------------------------------------------------------------+
+    double CalculateRangeStrength(double adx, double stdDevScore, double rangeTouches, double netChange)
+    {
+        double strength = 0.0;
+
+        // 1. Low ADX
+        if (adx < m_adxRangeThreshold)
+        {
+            strength += 40.0;
+        }
+
+        // 2. High standard deviation containment
+        if (stdDevScore > m_stdDevThreshold)
+        {
+            strength += 30.0;
+        }
+
+        // 3. Range touches
+        strength += rangeTouches * 0.3;
+
+        // 4. Low net movement
+        if (MathAbs(netChange) < 1.0)
+        {
+            strength += 20.0;
+        }
+
+        // Cap at 100
+        if (strength > 100.0)
+            strength = 100.0;
+
+        return strength;
+    }
+
+    //+------------------------------------------------------------------+
+    //| DECISION RULES                                                  |
+    //+------------------------------------------------------------------+
+    RegimeResult ApplyDecisionRules(RegimeResult &result, double adx, double slope,
+                                    double stdDevScore, double priceChangeRatio, double rangeTouches)
+    {
+        bool isTrendingByRules = false;
+        bool isRangingByRules = false;
+
+        // RULE 1: ADX > threshold AND significant slope → TRENDING
+        if (adx > m_adxTrendThreshold && MathAbs(slope) > m_slopeThreshold)
+        {
+            isTrendingByRules = true;
+        }
+
+        // RULE 2: Low ADX AND high std dev containment → RANGING
+        if (adx < m_adxRangeThreshold && stdDevScore > m_stdDevThreshold)
+        {
+            isRangingByRules = true;
+        }
+
+        // RULE 3: PriceChange/ATR ratio > threshold → TRENDING
+        if (priceChangeRatio > m_atrRatioThreshold)
+        {
+            isTrendingByRules = true;
+        }
+
+        // RULE 4: Multiple range touches → RANGING
+        if (rangeTouches > 60.0) // Approximately 3 touches
+        {
+            isRangingByRules = true;
+        }
+
+        // Apply rules
+        if (isTrendingByRules && !isRangingByRules)
+        {
+            // Clear trending case
+            result.regime = (result.trendStrength > 0) ? REGIME_TRENDING_UP : REGIME_TRENDING_DOWN;
+            result.confidence = MathAbs(result.trendStrength);
+        }
+        else if (!isTrendingByRules && isRangingByRules)
+        {
+            // Clear ranging case
+            result.regime = REGIME_RANGING;
+            result.confidence = result.rangeStrength;
+        }
+        else if (isTrendingByRules && isRangingByRules)
+        {
+            // Conflicting signals - use strength comparison
+            if (MathAbs(result.trendStrength) > result.rangeStrength)
             {
-                string display = "=== ALL MODULES ===\n";
-                display += TimeToString(TimeCurrent(), TIME_SECONDS) + "\n\n";
-                
-                // Decision Engine status
-                display += "DECISION ENGINE:\n";
-                display += decisionEngine.GetStatus() + "\n\n";
-                
-                // Trade Package status
-                display += "TRADE PACKAGE:\n";
-                if(g_packageManager != NULL && g_packageManager.IsInitialized()) {
-                    TradePackage package = g_packageManager.GetTradePackage(false);
-                    if(package.isValid) {
-                        display += StringFormat("Confidence: %.1f%%\n", package.overallConfidence);
-                        display += StringFormat("Direction: %s\n", package.directionAnalysis.dominantDirection);
-                    } else {
-                        display += "No valid package\n";
-                    }
-                } else {
-                    display += "Package Manager not available\n";
-                }
-                
-                // POI status
-                display += "\nPOI MODULE:\n";
-                display += POI_Enabled ? "ACTIVE" : "DISABLED";
-                
-                display += "\n\nType 0-9 to switch views";
-                Comment(display);
+                result.regime = (result.trendStrength > 0) ? REGIME_TRENDING_UP : REGIME_TRENDING_DOWN;
+                result.confidence = MathAbs(result.trendStrength);
             }
+            else
+            {
+                result.regime = REGIME_RANGING;
+                result.confidence = result.rangeStrength;
+            }
+        }
+        else
+        {
+            // Weak signals - use Golden Ratio
+            double goldenScore = (slope * 100.0) + (adx * 2.0) + (priceChangeRatio * 10.0);
+
+            if (goldenScore > 100.0 && MathAbs(result.trendStrength) > 60.0)
+            {
+                result.regime = (result.trendStrength > 0) ? REGIME_TRENDING_UP : REGIME_TRENDING_DOWN;
+                result.confidence = MathAbs(result.trendStrength);
+            }
+            else if (goldenScore < 50.0 && result.rangeStrength > 60.0)
+            {
+                result.regime = REGIME_RANGING;
+                result.confidence = result.rangeStrength;
+            }
+            else
+            {
+                // Uncertain
+                result.regime = REGIME_UNKNOWN;
+                result.confidence = MathMax(result.rangeStrength, MathAbs(result.trendStrength));
+            }
+        }
+
+        // Ensure confidence is capped
+        if (result.confidence > 100.0)
+            result.confidence = 100.0;
+
+        return result;
+    }
+
+    //+------------------------------------------------------------------+
+    //| INDICATOR CALCULATION FUNCTIONS                                 |
+    //+------------------------------------------------------------------+
+
+    // Calculate ADX value
+    double CalculateADX(int period = 14)
+    {
+        int handle = iADX(m_symbol, m_timeframe, period);
+        if (handle == INVALID_HANDLE)
+            return 0.0;
+
+        double adx[];
+        ArraySetAsSeries(adx, true);
+
+        if (CopyBuffer(handle, 0, 0, 1, adx) > 0)
+        {
+            IndicatorRelease(handle);
+            return adx[0];
+        }
+
+        IndicatorRelease(handle);
+        return 0.0;
+    }
+
+    // Calculate linear regression slope (% per bar)
+    double CalculateLinearRegressionSlope()
+    {
+        double closes[];
+        ArrayResize(closes, m_lookbackPeriod);
+        ArraySetAsSeries(closes, true);
+
+        // Get close prices
+        for (int i = 0; i < m_lookbackPeriod; i++)
+        {
+            closes[i] = iClose(m_symbol, m_timeframe, i);
+        }
+
+        // Calculate slope using least squares
+        double sumX = 0.0, sumY = 0.0, sumXY = 0.0, sumX2 = 0.0;
+
+        for (int i = 0; i < m_lookbackPeriod; i++)
+        {
+            sumX += i;
+            sumY += closes[i];
+            sumXY += i * closes[i];
+            sumX2 += i * i;
+        }
+
+        double N = (double)m_lookbackPeriod;
+        double slope = (N * sumXY - sumX * sumY) / (N * sumX2 - sumX * sumX);
+
+        // FIX: Check for zero or very small close price before division
+        double lastClose = closes[m_lookbackPeriod - 1];
+        if (MathAbs(lastClose) < 0.00001)
+            return 0.0;
+
+        // Convert to percentage change per bar
+        return (slope / lastClose) * 100.0;
+    }
+
+    // Calculate Price Change / ATR Ratio
+    double CalculatePriceChangeATRRatio()
+    {
+        double currentPrice = iClose(m_symbol, m_timeframe, 0);
+        double firstPrice = iClose(m_symbol, m_timeframe, m_lookbackPeriod - 1);
+
+        // FIX: Check for zero or negative prices
+        if (firstPrice <= 0.0 || currentPrice <= 0.0)
+            return 0.0;
+
+        // Calculate price change percentage
+        double priceChangePct = MathAbs((currentPrice - firstPrice) / firstPrice) * 100.0;
+
+        // Calculate ATR percentage
+        double atr = CalculateATR(14);
+
+        // FIX: Check for zero ATR
+        if (atr <= 0.0 || currentPrice <= 0.0)
+            return 0.0;
+
+        double atrPct = (atr / currentPrice) * 100.0;
+
+        if (atrPct > 0.0)
+        {
+            return priceChangePct / atrPct;
+        }
+
+        return 0.0;
+    }
+
+    // Calculate Standard Deviation Containment (% of prices inside 2 std dev bands)
+    double CalculateStdDevContainment()
+    {
+        double closes[];
+        ArrayResize(closes, m_lookbackPeriod);
+
+        // Get close prices
+        for (int i = 0; i < m_lookbackPeriod; i++)
+        {
+            closes[i] = iClose(m_symbol, m_timeframe, i);
+        }
+
+        // Calculate mean
+        double mean = 0.0;
+        for (int i = 0; i < m_lookbackPeriod; i++)
+        {
+            mean += closes[i];
+        }
+        mean /= m_lookbackPeriod;
+
+        // Calculate standard deviation
+        double variance = 0.0;
+        for (int i = 0; i < m_lookbackPeriod; i++)
+        {
+            double diff = closes[i] - mean;
+            variance += diff * diff;
+        }
+        variance /= m_lookbackPeriod;
+        double stdDev = MathSqrt(variance);
+
+        // Create bands at +/- 2 standard deviations
+        double upperBand = mean + (2.0 * stdDev);
+        double lowerBand = mean - (2.0 * stdDev);
+
+        // Count how many closes are inside the bands
+        int insideCount = 0;
+        for (int i = 0; i < m_lookbackPeriod; i++)
+        {
+            if (closes[i] >= lowerBand && closes[i] <= upperBand)
+            {
+                insideCount++;
+            }
+        }
+
+        // Return percentage
+        return ((double)insideCount / m_lookbackPeriod) * 100.0;
+    }
+
+    // Calculate range touches (support/resistance)
+    double CalculateRangeTouches()
+    {
+        // Find highest high and lowest low in lookback period
+        double highest = 0.0;
+        double lowest = 1e10;
+
+        for (int i = 0; i < m_lookbackPeriod; i++)
+        {
+            double high = iHigh(m_symbol, m_timeframe, i);
+            double low = iLow(m_symbol, m_timeframe, i);
+
+            if (high > highest)
+                highest = high;
+            if (low < lowest)
+                lowest = low;
+        }
+
+        if (highest <= lowest)
+            return 0.0;
+
+        // Calculate ATR for tolerance
+        double atr = CalculateATR(14);
+        double currentPrice = iClose(m_symbol, m_timeframe, 0);
+        double tolerance = (atr / currentPrice) * 100.0 * 0.5;
+
+        // Count touches of support and resistance
+        int touchCount = 0;
+
+        for (int i = 0; i < m_lookbackPeriod; i++)
+        {
+            double high = iHigh(m_symbol, m_timeframe, i);
+            double low = iLow(m_symbol, m_timeframe, i);
+
+            // Check if price touched resistance (within tolerance)
+            if (MathAbs((high - highest) / currentPrice * 100.0) < tolerance)
+            {
+                touchCount++;
+            }
+
+            // Check if price touched support (within tolerance)
+            if (MathAbs((low - lowest) / currentPrice * 100.0) < tolerance)
+            {
+                touchCount++;
+            }
+        }
+
+        // Calculate score (max 100)
+        double touchScore = MathMin(100.0, touchCount * 20.0);
+
+        // Adjust for range width (narrower ranges score higher)
+        double rangeWidthPct = ((highest - lowest) / currentPrice) * 100.0;
+        double widthScore = MathMax(0.0, 100.0 - (rangeWidthPct * 40.0));
+
+        // Combine scores
+        return (touchScore * 0.6 + widthScore * 0.4);
+    }
+
+    // Calculate net price change percentage
+    double CalculateNetPriceChange()
+    {
+        double currentPrice = iClose(m_symbol, m_timeframe, 0);
+        double firstPrice = iClose(m_symbol, m_timeframe, m_lookbackPeriod - 1);
+
+        if (firstPrice <= 0.0)
+            return 0.0;
+
+        return ((currentPrice - firstPrice) / firstPrice) * 100.0;
+    }
+
+    // Calculate ATR
+    double CalculateATR(int period = 14)
+    {
+        int handle = iATR(m_symbol, m_timeframe, period);
+        if (handle == INVALID_HANDLE)
+            return 0.0;
+
+        double atr[];
+        ArraySetAsSeries(atr, true);
+
+        if (CopyBuffer(handle, 0, 0, 1, atr) > 0)
+        {
+            IndicatorRelease(handle);
+            return atr[0];
+        }
+
+        IndicatorRelease(handle);
+        return 0.0;
+    }
+
+    //+------------------------------------------------------------------+
+    //| HELPER FUNCTIONS                                                |
+    //+------------------------------------------------------------------+
+
+    // Generate description for the regime
+    string GenerateDescription(RegimeResult &result, double adx, double slope)
+    {
+        string desc = "";
+
+        switch (result.regime)
+        {
+        case REGIME_TRENDING_UP:
+            desc = StringFormat("Strong Uptrend | ADX: %.1f > %.1f | Slope: +%.3f%%/bar",
+                                adx, m_adxTrendThreshold, MathAbs(slope));
             break;
-    }
-}
 
-// ============================================================
-// INITIALIZATION FUNCTION
-// ============================================================
-int OnInit()
-{
-    Print("=== INITIALIZING mk$ EA v3.00 ===");
-    
-    // Initialize Logger
-    if(!Logger::Initialize()) {
-        Print("ERROR: Failed to initialize Logger");
-        return INIT_FAILED;
-    }
-    
-    // Create IndicatorManager
-    g_indicatorManager = new IndicatorManager();
-    if(!g_indicatorManager.Initialize()) {
-        Print("ERROR: Failed to initialize IndicatorManager");
-        delete g_indicatorManager;
-        return INIT_FAILED;
-    }
-    
-    // Create PackageManager
-    g_packageManager = new TradePackageManager();
-    if(g_packageManager == NULL) {
-        Print("ERROR: Failed to create TradePackageManager");
-        delete g_indicatorManager;
-        return INIT_FAILED;
-    }
-    
-    // Configure PackageManager
-    g_packageManager.ConfigureModules(
-        UseMTFModule, UsePOIModule, UseVolumeModule, 
-        UseRSIModule, UseMACDModule, UseCandlePatternsModule
-    );
-    
-    if(!g_packageManager.Initialize(Symbol(), Period(), g_indicatorManager)) {
-        Print("ERROR: Failed to initialize TradePackageManager");
-        delete g_packageManager;
-        delete g_indicatorManager;
-        return INIT_FAILED;
-    }
-    
-    // Initialize POI Module
-    if(POI_Enabled && !poiModule.Initialize(Symbol(), true, 2.0, 3)) {
-        Print("WARNING: Failed to initialize POI Module");
-    }
-    
-    // Initialize DecisionEngine
-    if(!decisionEngine.Initialize("mk$ 6-Component Mode", 10000, UseAutoExecution)) {
-        Print("ERROR: Failed to initialize DecisionEngine");
-        delete g_packageManager;
-        delete g_indicatorManager;
-        return INIT_FAILED;
-    }
-    
-    // Configure DecisionEngine
-    DecisionParams params;
-    params.riskPercent = MaxRiskPerTrade;
-    params.cooldownMinutes = PositionCooldownMinutes;
-    params.buyConfidenceThreshold = 65.0;
-    params.sellConfidenceThreshold = 65.0;
-    
-    if(!decisionEngine.RegisterSymbol(Symbol(), params)) {
-        Print("ERROR: Failed to register symbol");
-        delete g_packageManager;
-        delete g_indicatorManager;
-        decisionEngine.Deinitialize();
-        return INIT_FAILED;
-    }
-    
-    // Set up timer
-    if(TimerInterval > 0) EventSetTimer(TimerInterval);
-    
-    // Enable keyboard events
-    ChartSetInteger(0, CHART_EVENT_KEYDOWN, true);
-    
-    // Show keyboard shortcuts help
-    Print("\n=== DISPLAY CONTROLS ===");
-    Print("Press number keys 0-9:");
-    Print("0: Clear display");
-    Print("1: Decision Engine Only");
-    Print("2: Trade Package Only");
-    Print("3: Components View");
-    Print("4: Decision Engine View");
-    Print("5: Combined View");
-    Print("6: Trade Package Tabular");
-    Print("7: Trade Package Detailed");
-    Print("8: POI Display");
-    Print("9: All Modules Summary");
-    Print("==============================\n");
-    
-    // Start with Decision Engine display
-    g_currentDisplay = DISPLAY_DECISION_ENGINE_ONLY;
-    
-    Print("✅ mk$ EA v3.00 INITIALIZED - Press 0-9 to toggle displays");
-    return INIT_SUCCEEDED;
-}
+        case REGIME_TRENDING_DOWN:
+            desc = StringFormat("Strong Downtrend | ADX: %.1f > %.1f | Slope: -%.3f%%/bar",
+                                adx, m_adxTrendThreshold, MathAbs(slope));
+            break;
 
-// ============================================================
-// TICK HANDLER
-// ============================================================
-void OnTick()
+        case REGIME_RANGING:
+            desc = StringFormat("Sideways Market | ADX: %.1f < %.1f | Consolidation",
+                                adx, m_adxRangeThreshold);
+            break;
+
+        default:
+            desc = "Market unclear - mixed signals detected";
+            break;
+        }
+
+        return desc;
+    }
+
+    //+------------------------------------------------------------------+
+    //| SETTER METHODS                                                  |
+    //+------------------------------------------------------------------+
+
+    void SetSymbol(string symbol) { m_symbol = symbol; }
+    void SetTimeframe(ENUM_TIMEFRAMES tf) { m_timeframe = tf; }
+    void SetLookbackPeriod(int period) { m_lookbackPeriod = period; }
+
+    void SetThresholds(double adxTrend = 25.0, double adxRange = 20.0,
+                       double slope = 0.08, double atrRatio = 2.5,
+                       double stdDev = 70.0)
+    {
+        m_adxTrendThreshold = adxTrend;
+        m_adxRangeThreshold = adxRange;
+        m_slopeThreshold = slope;
+        m_atrRatioThreshold = atrRatio;
+        m_stdDevThreshold = stdDev;
+    }
+};
+
+//+------------------------------------------------------------------+
+//| Market Lifecycle Tracker Class                                  |
+//+------------------------------------------------------------------+
+class MarketLifecycleTracker
 {
-    static datetime lastPackageUpdate = 0;
-    static datetime lastDisplayUpdate = 0;
+private:
+    string m_symbol;
+    ENUM_TIMEFRAMES m_timeframe;
+
+    // Current state
+    LifecycleState m_currentState;
+    RangeInfo m_currentRange;
+    TrendInfo m_currentTrend;
+    RangeInfo m_pullbackRange;
+
+    // Detection parameters
+    int m_minRangeTouches;
+    int m_minPullbackTouches;
+    double m_breakoutMargin; // ATR multiplier
+    double m_minRangeWidthPct;
+    double m_pullbackThresholdPct;
+
+    // History
+    double m_lastPrices[5];
+    datetime m_lastUpdateTime;
+
+    int m_rangeInitializationBars; // Bars to use for initial range
+    bool m_rangeInitialized;       // Track if range is initialized
+
+public:
+    // Constructor
+    MarketLifecycleTracker(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_H1)
+    {
+        m_symbol = (symbol == NULL) ? Symbol() : symbol;
+        m_timeframe = tf;
+
+        // Initialize with default parameters
+        m_minRangeTouches = 3;
+        m_minPullbackTouches = 2;
+        m_breakoutMargin = 0.3;        // 0.3 * ATR
+        m_minRangeWidthPct = 0.5;      // Minimum 0.5% range width
+        m_pullbackThresholdPct = 20.0; // 20% retracement to consider pullback
+
+        m_rangeInitializationBars = 5; // Use last 5 bars for initialization
+        m_rangeInitialized = false;
+
+        Reset();
+    }
+
+    //+------------------------------------------------------------------+
+    //| MAIN UPDATE FUNCTION                                           |
+    //+------------------------------------------------------------------+
+    LifecycleState Update()
+    {
+        // Check if it's a new bar
+        if (!IsNewBar())
+            return m_currentState;
+
+        // 1. Get current price
+        double currentPrice = iClose(m_symbol, m_timeframe, 0);
+
+        // 2. Update price history
+        UpdatePriceHistory(currentPrice);
+
+        // 3. Check for range reinitialization (NEW)
+        CheckForRangeReinitialization(currentPrice);
+
+        // 4. Process based on current state
+        switch (m_currentState.state)
+        {
+        case LIFECYCLE_UNKNOWN:
+            InitialDetection(currentPrice);
+            break;
+
+        case LIFECYCLE_RANGE_FORMING:
+            ProcessRangeForming(currentPrice);
+            break;
+
+        case LIFECYCLE_RANGE_ACTIVE:
+            ProcessRangeActive(currentPrice);
+            break;
+
+        case LIFECYCLE_BREAKOUT_DETECTED:
+            ProcessBreakoutDetected(currentPrice);
+            break;
+
+        case LIFECYCLE_TREND_CONFIRMED:
+            ProcessTrendConfirmed(currentPrice);
+            break;
+
+        case LIFECYCLE_PULLBACK_FORMING:
+            ProcessPullbackForming(currentPrice);
+            break;
+
+        case LIFECYCLE_PULLBACK_ACTIVE:
+            ProcessPullbackActive(currentPrice);
+            break;
+
+        case LIFECYCLE_TREND_RESUMING:
+            ProcessTrendResuming(currentPrice);
+            break;
+
+        case LIFECYCLE_TREND_WEAKENING:
+            ProcessTrendWeakening(currentPrice);
+            break;
+        }
+
+        // 4. Update state duration
+        UpdateStateDuration();
+
+        return m_currentState;
+    }
+
+    //+------------------------------------------------------------------+
+    //| STATE PROCESSING FUNCTIONS                                      |
+    //+------------------------------------------------------------------+
+
+private:
+    bool ShouldReinitializeForPullback(double price)
+    {
+        // Only reinitialize during pullback formation if:
+        // 1. We're in a pullback state
+        // 2. A valid range is forming (width > minWidth)
+
+        if (m_currentState.state == LIFECYCLE_PULLBACK_FORMING ||
+            m_currentState.state == LIFECYCLE_PULLBACK_ACTIVE)
+        {
+            // Check if pullback range has formed with sufficient width
+            if (m_pullbackRange.IsValid() &&
+                m_pullbackRange.widthPct >= m_minRangeWidthPct)
+            {
+                // Valid pullback range detected - time to reinitialize main range
+                Print("Valid pullback range detected (width=" +
+                      DoubleToString(m_pullbackRange.widthPct, 2) +
+                      "%), reinitializing main range");
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool ShouldReinitializeForNewRange(double price)
+    {
+        // Check if we're transitioning to a new range state
+        if (m_currentState.state == LIFECYCLE_RANGE_FORMING)
+        {
+            // Wait for range to form with sufficient width
+            if (m_currentRange.IsValid() &&
+                m_currentRange.widthPct >= m_minRangeWidthPct &&
+                m_currentRange.touchCount >= m_minRangeTouches)
+            {
+                // Valid new range formed
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    void InitialDetection(double price)
+    {
+        // Use MarketRegimeDetector to determine initial state
+        MarketRegimeDetector detector(m_symbol, m_timeframe);
+        RegimeResult regime = detector.DetectRegime();
+
+        if (regime.IsRanging() && regime.confidence > 60)
+        {
+            // Start with range detection
+            m_currentState.state = LIFECYCLE_RANGE_FORMING;
+            InitializeRange();
+            m_currentState.description = "Initial range detection started";
+        }
+        else if (regime.IsTrending() && regime.confidence > 70)
+        {
+            // Already in trend
+            m_currentState.state = LIFECYCLE_TREND_CONFIRMED;
+            InitializeTrend(regime);
+            m_currentState.description = "Already in confirmed trend";
+        }
+        else
+        {
+            m_currentState.description = "Market unclear, waiting for formation";
+        }
+    }
+
+    void ProcessRangeForming(double price)
+    {
+        // Update range boundaries if price extends beyond current range
+        UpdateRangeBoundaries(price);
+
+        // Check for touches
+        if (IsRangeTouch(price))
+        {
+            m_currentRange.touchCount++;
+            m_currentState.description = StringFormat("Range forming - Touch %d/%d",
+                                                      m_currentRange.touchCount, m_minRangeTouches);
+        }
+
+        // Validate range after enough touches
+        if (m_currentRange.touchCount >= m_minRangeTouches)
+        {
+            m_currentRange.validated = true;
+            m_currentState.state = LIFECYCLE_RANGE_ACTIVE;
+            m_currentState.description = "Range validated and active";
+        }
+
+        // Check for early breakout
+        if (CheckRangeBreakout(price))
+        {
+            m_currentState.state = LIFECYCLE_BREAKOUT_DETECTED;
+            m_currentState.description = "Early breakout from forming range";
+        }
+    }
+
+    void ProcessRangeActive(double price)
+    {
+        // Update range if price extends it
+        UpdateRangeBoundaries(price);
+
+        // Check for breakout
+        if (CheckRangeBreakout(price))
+        {
+            m_currentState.state = LIFECYCLE_BREAKOUT_DETECTED;
+            m_currentState.description = "Breakout detected from active range";
+        }
+        else if (IsRangeTouch(price))
+        {
+            m_currentRange.touchCount++;
+            m_currentState.description = StringFormat("Range active - Touch %d",
+                                                      m_currentRange.touchCount);
+        }
+    }
+
+    void ProcessBreakoutDetected(double price)
+    {
+        // Check for breakout confirmation (3 consecutive closes outside range)
+        if (ConfirmBreakout(price))
+        {
+            // Determine trend direction
+            MarketRegimeDetector detector(m_symbol, m_timeframe);
+            RegimeResult regime = detector.DetectRegime();
+
+            if (regime.IsTrending())
+            {
+                m_currentState.state = LIFECYCLE_TREND_CONFIRMED;
+                InitializeTrend(regime);
+                m_currentState.description = "Breakout confirmed, trend established";
+            }
+        }
+        else if (CheckFalseBreakout(price))
+        {
+            // Price returned to range
+            m_currentState.state = LIFECYCLE_RANGE_ACTIVE;
+            m_currentState.description = "False breakout, range still active";
+        }
+    }
+
+    void ProcessTrendConfirmed(double price)
+    {
+        // Update trend information
+        m_currentTrend.Update(price);
+
+        // Check for pullback
+        if (m_currentTrend.IsRetracementSignificant(m_pullbackThresholdPct))
+        {
+            m_currentState.state = LIFECYCLE_PULLBACK_FORMING;
+            InitializePullbackRange(price);
+            m_currentState.description = StringFormat("Pullback forming (%.1f%% retracement)",
+                                                      m_currentTrend.GetCurrentRetracementPct());
+        }
+        else
+        {
+            m_currentState.description = StringFormat("Trend continuing - Move: %.2f%%",
+                                                      m_currentTrend.totalMovePct);
+        }
+    }
+
+    void ProcessPullbackForming(double price)
+    {
+        // Update pullback range (this can expand normally)
+        UpdatePullbackRange(price);
+
+        // Check for touches
+        if (IsPullbackTouch(price))
+        {
+            m_pullbackRange.touchCount++;
+            m_currentState.description = StringFormat("Pullback forming - Touch %d/%d",
+                                                      m_pullbackRange.touchCount, m_minPullbackTouches);
+        }
+
+        // Validate pullback after enough touches
+        if (m_pullbackRange.touchCount >= m_minPullbackTouches)
+        {
+            m_pullbackRange.validated = true;
+            m_currentState.state = LIFECYCLE_PULLBACK_ACTIVE;
+            m_currentState.description = "Pullback range validated";
+
+            // Check if pullback range is wide enough to reinitialize main range
+            if (m_pullbackRange.widthPct >= m_minRangeWidthPct)
+            {
+                Print("Wide pullback detected - will reinitialize main range on breakout");
+            }
+        }
+
+        // Check if trend resumes
+        if (CheckPullbackBreakout(price))
+        {
+            m_currentState.state = LIFECYCLE_TREND_RESUMING;
+            m_currentState.description = "Trend resuming from pullback";
+        }
+    }
+
+    void ProcessPullbackActive(double price)
+    {
+        // Check for breakout from pullback range
+        if (CheckPullbackBreakout(price))
+        {
+            m_currentState.state = LIFECYCLE_TREND_RESUMING;
+            m_currentState.description = "Breakout from pullback range";
+
+            // When breakout occurs, check if we should use pullback as new range
+            if (m_pullbackRange.widthPct >= m_minRangeWidthPct)
+            {
+                // Pullback was significant - reinitialize main range
+                m_currentRange = m_pullbackRange;
+                m_currentRange.startTime = TimeCurrent();
+                m_rangeInitialized = true;
+
+                Print("Main range reinitialized from significant pullback after breakout");
+            }
+        }
+        else if (IsPullbackTouch(price))
+        {
+            m_pullbackRange.touchCount++;
+            m_currentState.description = StringFormat("Pullback active - Touch %d",
+                                                      m_pullbackRange.touchCount);
+        }
+    }
+
+    void ProcessTrendResuming(double price)
+    {
+        // Check for trend resumption confirmation
+        if (ConfirmTrendResumption(price))
+        {
+            m_currentState.state = LIFECYCLE_TREND_CONFIRMED;
+            // Clear pullback range
+            m_pullbackRange = RangeInfo();
+            m_currentState.description = "Trend fully resumed";
+        }
+    }
+
+    void ProcessTrendWeakening(double price)
+    {
+        // Check if trend regains strength or transitions to range
+        MarketRegimeDetector detector(m_symbol, m_timeframe);
+        RegimeResult regime = detector.DetectRegime();
+
+        if (regime.confidence > 70 && regime.IsTrending())
+        {
+            m_currentState.state = LIFECYCLE_TREND_CONFIRMED;
+            m_currentState.description = "Trend regained strength";
+        }
+        else if (regime.IsRanging() && regime.confidence > 60)
+        {
+            // Transition back to range
+            m_currentState.state = LIFECYCLE_RANGE_FORMING;
+            InitializeRange();
+            m_currentState.description = "Trend ended, new range forming";
+        }
+    }
+
+    //+------------------------------------------------------------------+
+    //| HELPER FUNCTIONS                                                |
+    //+------------------------------------------------------------------+
+
+    bool CheckRangeBreakout(double price)
+    {
+        if (!m_currentRange.IsValid())
+            return false;
+
+        double atr = CalculateATR(14);
+        double margin = atr * m_breakoutMargin;
+
+        if (price > m_currentRange.top + margin)
+        {
+            m_currentTrend.direction = REGIME_TRENDING_UP;
+            return true;
+        }
+        else if (price < m_currentRange.bottom - margin)
+        {
+            m_currentTrend.direction = REGIME_TRENDING_DOWN;
+            return true;
+        }
+
+        return false;
+    }
+
+    bool ConfirmBreakout(double price)
+    {
+        // Need 3 consecutive closes outside range
+        int consecutive = 0;
+        for (int i = 0; i < 3; i++)
+        {
+            double closePrice = iClose(m_symbol, m_timeframe, i);
+
+            if (m_currentTrend.direction == REGIME_TRENDING_UP)
+            {
+                if (closePrice > m_currentRange.top)
+                    consecutive++;
+            }
+            else if (m_currentTrend.direction == REGIME_TRENDING_DOWN)
+            {
+                if (closePrice < m_currentRange.bottom)
+                    consecutive++;
+            }
+        }
+
+        return consecutive >= 3;
+    }
+
+    bool CheckFalseBreakout(double price)
+    {
+        if (!m_currentRange.IsValid())
+            return false;
+
+        // If price returns inside the range, it's a false breakout
+        return m_currentRange.IsPriceInside(price);
+    }
+
+    bool CheckPullbackBreakout(double price)
+    {
+        if (!m_pullbackRange.IsValid())
+            return false;
+
+        // Breakout from pullback in the direction of the main trend
+        if (m_currentTrend.direction == REGIME_TRENDING_UP)
+        {
+            return price > m_pullbackRange.top;
+        }
+        else if (m_currentTrend.direction == REGIME_TRENDING_DOWN)
+        {
+            return price < m_pullbackRange.bottom;
+        }
+
+        return false;
+    }
+
+    bool ConfirmTrendResumption(double price)
+    {
+        // Price should continue in trend direction
+        MarketRegimeDetector detector(m_symbol, m_timeframe);
+        RegimeResult regime = detector.DetectRegime();
+
+        if (m_currentTrend.direction == REGIME_TRENDING_UP)
+        {
+            return regime.IsUpTrend() && regime.confidence > 60;
+        }
+        else if (m_currentTrend.direction == REGIME_TRENDING_DOWN)
+        {
+            return regime.IsDownTrend() && regime.confidence > 60;
+        }
+
+        return false;
+    }
+
+    bool IsRangeTouch(double price)
+    {
+        if (!m_currentRange.IsValid())
+            return false;
+
+        double atr = CalculateATR(14);
+        double tolerance = atr * 0.1; // 0.1 * ATR tolerance
+
+        // Check if price touches range boundaries
+        return (MathAbs(price - m_currentRange.top) < tolerance) ||
+               (MathAbs(price - m_currentRange.bottom) < tolerance);
+    }
+
+    bool IsPullbackTouch(double price)
+    {
+        if (!m_pullbackRange.IsValid())
+            return false;
+
+        double atr = CalculateATR(14);
+        double tolerance = atr * 0.1;
+
+        return (MathAbs(price - m_pullbackRange.top) < tolerance) ||
+               (MathAbs(price - m_pullbackRange.bottom) < tolerance);
+    }
+
+    void UpdateRangeBoundaries(double price)
+    {
+        if (!m_rangeInitialized)
+        {
+            InitializeRange();
+            return;
+        }
+
+        // FIXED RANGE: Only update position, NEVER change boundaries
+        m_currentRange.currentPosition = m_currentRange.CalculatePosition(price);
+    }
+
+    // NEW: Check for pullback-based reinitialization
+    void ProcessStateForReinitialization()
+    {
+        // Only reinitialize during pullback->range transitions
+        if ((m_currentState.state == LIFECYCLE_PULLBACK_ACTIVE ||
+             m_currentState.state == LIFECYCLE_TREND_WEAKENING) &&
+            m_pullbackRange.IsValid() &&
+            m_pullbackRange.widthPct >= m_minRangeWidthPct)
+        {
+            // Use pullback range as new main range
+            m_currentRange = m_pullbackRange;
+            Print("Range reinitialized from pullback: width=" + 
+                  DoubleToString(m_pullbackRange.widthPct, 2) + "%");
+        }
+    }
+
+    void UpdatePullbackRange(double price)
+    {
+        if (!m_pullbackRange.IsValid())
+        {
+            m_pullbackRange.top = price;
+            m_pullbackRange.bottom = price;
+        }
+        else
+        {
+            m_pullbackRange.top = MathMax(m_pullbackRange.top, price);
+            m_pullbackRange.bottom = MathMin(m_pullbackRange.bottom, price);
+        }
+
+        double mid = (m_pullbackRange.top + m_pullbackRange.bottom) / 2;
+        m_pullbackRange.widthPct = ((m_pullbackRange.top - m_pullbackRange.bottom) / mid) * 100.0;
+    }
+
+    void InitializeRange()
+    {
+        // Always use last 5 bars to find initial range
+        int bars = 5;
+        double highest = 0;
+        double lowest = 1e10;
+
+        for (int i = 0; i < bars; i++)
+        {
+            double high = iHigh(m_symbol, m_timeframe, i);
+            double low = iLow(m_symbol, m_timeframe, i);
+
+            if (high > highest)
+                highest = high;
+            if (low < lowest)
+                lowest = low;
+        }
+
+        m_currentRange.top = highest;
+        m_currentRange.bottom = lowest;
+        m_currentRange.startTime = TimeCurrent();
+        m_currentRange.touchCount = 1;
+        m_currentRange.validated = false;
+
+        double mid = (highest + lowest) / 2;
+        if (mid > 0)
+            m_currentRange.widthPct = ((highest - lowest) / mid) * 100.0;
+        else
+            m_currentRange.widthPct = 0.0;
+
+        double currentPrice = iClose(m_symbol, m_timeframe, 0);
+        m_currentRange.currentPosition = m_currentRange.CalculatePosition(currentPrice);
+
+        m_rangeInitialized = true;
+
+        Print(StringFormat("FIXED Range Initialized: Top=%.5f, Bottom=%.5f, Width=%.2f%%, Bars: 5",
+                           highest, lowest, m_currentRange.widthPct));
+    }
+
+    void InitializeTrend(RegimeResult &regime)
+    {
+        m_currentTrend.direction = regime.regime;
+        m_currentTrend.startPrice = iClose(m_symbol, m_timeframe, 0);
+        m_currentTrend.startTime = TimeCurrent();
+        m_currentTrend.strongestPoint = m_currentTrend.startPrice;
+        m_currentTrend.currentPrice = m_currentTrend.startPrice;
+        m_currentTrend.trendBars = 0;
+        m_currentTrend.totalMovePct = 0.0;
+    }
+
+    void InitializePullbackRange(double price)
+    {
+        m_pullbackRange.top = price;
+        m_pullbackRange.bottom = price;
+        m_pullbackRange.startTime = TimeCurrent();
+        m_pullbackRange.touchCount = 1;
+        m_pullbackRange.validated = false;
+        m_pullbackRange.widthPct = 0.0;
+    }
+
+    void UpdatePriceHistory(double price)
+    {
+        // Shift array
+        for (int i = 4; i > 0; i--)
+        {
+            m_lastPrices[i] = m_lastPrices[i - 1];
+        }
+        m_lastPrices[0] = price;
+    }
+
+    void UpdateStateDuration()
+    {
+        m_currentState.durationBars++;
+    }
+
+    bool IsNewBar()
+    {
+        datetime currentTime = iTime(m_symbol, m_timeframe, 0);
+        if (m_lastUpdateTime != currentTime)
+        {
+            m_lastUpdateTime = currentTime;
+            return true;
+        }
+        return false;
+    }
+
+    // Utility function from original detector
+    double CalculateATR(int period = 14)
+    {
+        int handle = iATR(m_symbol, m_timeframe, period);
+        if (handle == INVALID_HANDLE)
+            return 0.0;
+
+        double atr[];
+        ArraySetAsSeries(atr, true);
+
+        if (CopyBuffer(handle, 0, 0, 1, atr) > 0)
+        {
+            IndicatorRelease(handle);
+            return atr[0];
+        }
+
+        IndicatorRelease(handle);
+        return 0.0;
+    }
+
+public:
+    //+------------------------------------------------------------------+
+    //| GETTER METHODS                                                  |
+    //+------------------------------------------------------------------+
+
+    LifecycleState GetCurrentState() const { return m_currentState; }
+    RangeInfo GetCurrentRange() const { return m_currentRange; }
+    TrendInfo GetCurrentTrend() const { return m_currentTrend; }
+    RangeInfo GetPullbackRange() const { return m_pullbackRange; }
+
+    //+------------------------------------------------------------------+
+    //| SETTER METHODS                                                  |
+    //+------------------------------------------------------------------+
+
+    void SetParameters(int minRangeTouches = 3, int minPullbackTouches = 2,
+                       double breakoutMargin = 0.3, double minRangeWidthPct = 0.5,
+                       double pullbackThresholdPct = 20.0)
+    {
+        m_minRangeTouches = minRangeTouches;
+        m_minPullbackTouches = minPullbackTouches;
+        m_breakoutMargin = breakoutMargin;
+        m_minRangeWidthPct = minRangeWidthPct;
+        m_pullbackThresholdPct = pullbackThresholdPct;
+    }
+
+    void Reset()
+    {
+        m_currentState = LifecycleState();
+        m_currentRange = RangeInfo();
+        m_currentTrend = TrendInfo();
+        m_pullbackRange = RangeInfo();
+        m_lastUpdateTime = 0;
+        ArrayInitialize(m_lastPrices, 0.0);
+    }
+
+    //+------------------------------------------------------------------+
+    //| QUICK STATUS CHECK                                              |
+    //+------------------------------------------------------------------+
+
+    string GetFullStatus() const
+    {
+        string status = "=== MARKET LIFECYCLE STATUS ===\n";
+        status += "State: " + m_currentState.ToString() + "\n";
+
+        if (m_currentRange.IsValid())
+        {
+            status += "Current Range: " + m_currentRange.ToString() + "\n";
+        }
+
+        if (m_currentTrend.direction != REGIME_UNKNOWN)
+        {
+            status += "Current Trend: " + m_currentTrend.ToString() + "\n";
+        }
+
+        if (m_pullbackRange.IsValid())
+        {
+            status += "Pullback Range: " + m_pullbackRange.ToString() + "\n";
+        }
+
+        return status;
+    }
+
+    // Called from Update() to check for reinitialization
+    void CheckForRangeReinitialization(double price)
+    {
+        // Reinitialize only in specific conditions:
+
+        // 1. When transitioning from trend to pullback with valid range
+        if (ShouldReinitializeForPullback(price))
+        {
+            // Use pullback range as the new main range
+            m_currentRange = m_pullbackRange;
+            m_currentRange.startTime = TimeCurrent();
+            m_rangeInitialized = true;
+
+            Print("Main range reinitialized from pullback: " + m_currentRange.ToString());
+            return;
+        }
+
+        // 2. When a new range is actively forming (after trend ends)
+        if (ShouldReinitializeForNewRange(price))
+        {
+            // Already have a valid range, just mark as initialized
+            m_rangeInitialized = true;
+            Print("New range established: " + m_currentRange.ToString());
+        }
+
+        // 3. Never reinitialize due to price moving outside range
+        //    (that's the whole point of fixed ranges!)
+    }
+};
+
+//+------------------------------------------------------------------+
+//| Market Analysis Manager Class                                   |
+//+------------------------------------------------------------------+
+class MarketManager
+{
+private:
+    MarketRegimeDetector m_regimeDetector;
+    MarketLifecycleTracker m_lifecycleTracker;
+    string m_symbol;
+    ENUM_TIMEFRAMES m_timeframe;
+
+public:
+    MarketManager(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_H1) : m_regimeDetector(symbol, tf),
+                                                                          m_lifecycleTracker(symbol, tf)
+    {
+        m_symbol = (symbol == NULL) ? Symbol() : symbol;
+        m_timeframe = tf;
+    }
+
+    //+------------------------------------------------------------------+
+    //| PUBLIC INTERFACE METHODS                                        |
+    //+------------------------------------------------------------------+
+
+    // Unified analysis
+    struct MarketAnalysis
+    {
+        RegimeResult regime;      // Current regime
+        LifecycleState lifecycle; // Current lifecycle state
+        datetime analysisTime;
+        double currentPrice;
+
+        string ToString() const
+        {
+            string result = "=== MARKET ANALYSIS ===\n";
+            result += "Time: " + TimeToString(analysisTime, TIME_DATE | TIME_SECONDS) + "\n";
+            result += "Price: " + DoubleToString(currentPrice, 5) + "\n";
+            result += "Regime: " + regime.ToString() + "\n";
+            result += "Lifecycle: " + lifecycle.ToString() + "\n";
+            return result;
+        }
+    };
+
+    MarketAnalysis GetCompleteAnalysis()
+    {
+        MarketAnalysis analysis;
+        analysis.regime = m_regimeDetector.DetectRegime();
+        analysis.lifecycle = m_lifecycleTracker.Update();
+        analysis.analysisTime = TimeCurrent();
+        analysis.currentPrice = iClose(m_symbol, m_timeframe, 0);
+
+        return analysis;
+    }
+
+    //+------------------------------------------------------------------+
+    //| REGIME DETECTOR WRAPPERS                                        |
+    //+------------------------------------------------------------------+
+
+    RegimeResult DetectRegime()
+    {
+        return m_regimeDetector.DetectRegime();
+    }
+
+    void SetRegimeThresholds(double adxTrend = 25.0, double adxRange = 20.0,
+                             double slope = 0.08, double atrRatio = 2.5,
+                             double stdDev = 70.0)
+    {
+        m_regimeDetector.SetThresholds(adxTrend, adxRange, slope, atrRatio, stdDev);
+    }
+
+    void SetRegimeSymbol(string symbol)
+    {
+        m_regimeDetector.SetSymbol(symbol);
+    }
+
+    void SetRegimeTimeframe(ENUM_TIMEFRAMES tf)
+    {
+        m_regimeDetector.SetTimeframe(tf);
+    }
+
+    void SetRegimeLookback(int period)
+    {
+        m_regimeDetector.SetLookbackPeriod(period);
+    }
+
+    //+------------------------------------------------------------------+
+    //| LIFECYCLE TRACKER WRAPPERS                                      |
+    //+------------------------------------------------------------------+
+
+    LifecycleState UpdateLifecycle()
+    {
+        return m_lifecycleTracker.Update();
+    }
+
+    string GetLifecycleStatus() const
+    {
+        return m_lifecycleTracker.GetFullStatus();
+    }
+
+    LifecycleState GetCurrentLifecycleState() const
+    {
+        return m_lifecycleTracker.GetCurrentState();
+    }
+
+    RangeInfo GetCurrentRange() const
+    {
+        return m_lifecycleTracker.GetCurrentRange();
+    }
+
+    TrendInfo GetCurrentTrend() const
+    {
+        return m_lifecycleTracker.GetCurrentTrend();
+    }
+
+    void SetLifecycleParameters(int minRangeTouches = 3, int minPullbackTouches = 2,
+                                double breakoutMargin = 0.3, double minRangeWidthPct = 0.5,
+                                double pullbackThresholdPct = 20.0)
+    {
+        m_lifecycleTracker.SetParameters(minRangeTouches, minPullbackTouches,
+                                         breakoutMargin, minRangeWidthPct,
+                                         pullbackThresholdPct);
+    }
+
+    void ResetLifecycle()
+    {
+        m_lifecycleTracker.Reset();
+    }
+
+    //+------------------------------------------------------------------+
+    //| TRADING SIGNAL GENERATION                                       |
+    //+------------------------------------------------------------------+
+
+    bool IsRangeTradingSignal()
+    {
+        MarketAnalysis analysis = GetCompleteAnalysis();
+
+        // Signal for range trading when:
+        // 1. In active range
+        // 2. Price near range boundaries
+        // 3. Good regime confidence
+
+        if (analysis.lifecycle.state == LIFECYCLE_RANGE_ACTIVE &&
+            analysis.regime.IsRanging() &&
+            analysis.regime.confidence > 60)
+        {
+            RangeInfo range = GetCurrentRange();
+            double currentPrice = analysis.currentPrice;
+            double atr = CalculateATR(14);
+
+            // Check if price near range edges
+            double tolerance = atr * 0.15;
+
+            bool nearTop = MathAbs(currentPrice - range.top) < tolerance;
+            bool nearBottom = MathAbs(currentPrice - range.bottom) < tolerance;
+
+            return nearTop || nearBottom;
+        }
+
+        return false;
+    }
+
+    bool IsBreakoutSignal()
+    {
+        MarketAnalysis analysis = GetCompleteAnalysis();
+
+        // Signal for breakout when:
+        // 1. Breakout just detected
+        // 2. Or pullback breakout (trend resumption)
+
+        return (analysis.lifecycle.state == LIFECYCLE_BREAKOUT_DETECTED ||
+                analysis.lifecycle.state == LIFECYCLE_TREND_RESUMING);
+    }
+
+    bool IsTrendFollowingSignal()
+    {
+        MarketAnalysis analysis = GetCompleteAnalysis();
+
+        // Signal for trend following when:
+        // 1. In confirmed trend
+        // 2. Good trend strength
+        // 3. Not in significant pullback
+
+        return (analysis.lifecycle.state == LIFECYCLE_TREND_CONFIRMED &&
+                analysis.regime.IsTrending() &&
+                analysis.regime.confidence > 70);
+    }
+
+    //+------------------------------------------------------------------+
+    //| RISK MANAGEMENT HELPERS                                         |
+    //+------------------------------------------------------------------+
+
+    double GetRangeStopLossDistance()
+    {
+        RangeInfo range = GetCurrentRange();
+        if (!range.IsValid())
+            return 0.0;
+
+        return (range.top - range.bottom) * 0.5; // Half the range width
+    }
+
+    double GetTrendStopLossDistance()
+    {
+        double atr = CalculateATR(14);
+        return atr * 2.0; // 2 ATR for trend trades
+    }
+
+    //+------------------------------------------------------------------+
+    //| UTILITY METHODS                                                 |
+    //+------------------------------------------------------------------+
+
+    void SetSymbol(string symbol)
+    {
+        m_symbol = symbol;
+        m_regimeDetector.SetSymbol(symbol);
+        // Note: MarketLifecycleTracker needs to be recreated or have a SetSymbol method
+    }
+
+    void SetTimeframe(ENUM_TIMEFRAMES tf)
+    {
+        m_timeframe = tf;
+        m_regimeDetector.SetTimeframe(tf);
+        // Note: MarketLifecycleTracker needs to be recreated or have a SetTimeframe method
+    }
+
+    string GetSymbol() const { return m_symbol; }
+    ENUM_TIMEFRAMES GetTimeframe() const { return m_timeframe; }
+
+    RangeInfo GetPullbackRange() const
+    {
+        return m_lifecycleTracker.GetPullbackRange();
+    }
     
-    // POI updates
-    if(POI_Enabled) poiModule.OnTick();
-    
-    // PackageManager updates
-    if(g_packageManager != NULL && g_packageManager.IsInitialized()) {
-        g_packageManager.OnTick();
+    bool ShouldReinitializeRange() const
+    {
+        // Check if we're in a pullback with valid range
+        LifecycleState state = m_lifecycleTracker.GetCurrentState();
+        RangeInfo pullback = m_lifecycleTracker.GetPullbackRange();
         
-        // Generate new package periodically
-        if(TimeCurrent() - lastPackageUpdate >= PackageUpdateInterval) {
-            lastPackageUpdate = TimeCurrent();
-            TradePackage freshPackage = g_packageManager.GetTradePackage(true);
-            
-            // Send MINIMAL interface to DecisionEngine
-            if(UseDecisionEngine && freshPackage.isValid) {
-                DecisionEngineInterface deInterface;
-                
-                // ONLY fields that DecisionEngine ACTUALLY needs:
-                deInterface.symbol = Symbol();
-                deInterface.overallConfidence = freshPackage.overallConfidence;
-                deInterface.analysisTime = TimeCurrent();
-                deInterface.isValid = freshPackage.isValid;
-                
-                // Get direction from available field
-                if(freshPackage.directionAnalysis.dominantDirection != "") {
-                    deInterface.dominantDirection = freshPackage.directionAnalysis.dominantDirection;
-                } else {
-                    deInterface.dominantDirection = "NEUTRAL";
+        return ((state.state == LIFECYCLE_PULLBACK_FORMING || 
+                 state.state == LIFECYCLE_PULLBACK_ACTIVE) &&
+                pullback.IsValid() && 
+                pullback.widthPct >= 0.5); // Using minRangeWidthPct
+    }
+    
+    
+    // Manual reinitialization (for debugging)
+    void ForceReinitializeRange()
+    {
+        // You'll need to add a public method to MarketLifecycleTracker
+        // m_lifecycleTracker.InitializeRange();
+    }
+
+private:
+    // Helper to calculate ATR
+    double CalculateATR(int period = 14)
+    {
+        int handle = iATR(m_symbol, m_timeframe, period);
+        if (handle == INVALID_HANDLE)
+            return 0.0;
+
+        double atr[];
+        ArraySetAsSeries(atr, true);
+
+        if (CopyBuffer(handle, 0, 0, 1, atr) > 0)
+        {
+            IndicatorRelease(handle);
+            return atr[0];
+        }
+
+        IndicatorRelease(handle);
+        return 0.0;
+    }
+};
+
+//+------------------------------------------------------------------+
+//| GLOBAL HELPER FUNCTIONS FOR DECISION ENGINE                    |
+//+------------------------------------------------------------------+
+
+// Quick unified analysis
+MarketManager::MarketAnalysis QuickMarketAnalysis(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_H1)
+{
+    static MarketManager *manager = NULL;
+
+    if (manager == NULL || manager.GetSymbol() != symbol || manager.GetTimeframe() != tf)
+    {
+        if (manager != NULL)
+            delete manager;
+        manager = new MarketManager(symbol, tf);
+    }
+
+    return manager.GetCompleteAnalysis();
+}
+
+// Quick trading signal checks
+bool IsGoodForRangeTrading(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_H1)
+{
+    static MarketManager *manager = NULL;
+
+    if (manager == NULL || manager.GetSymbol() != symbol || manager.GetTimeframe() != tf)
+    {
+        if (manager != NULL)
+            delete manager;
+        manager = new MarketManager(symbol, tf);
+    }
+
+    return manager.IsRangeTradingSignal();
+}
+
+bool IsGoodForBreakoutTrading(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_H1)
+{
+    static MarketManager *manager = NULL;
+
+    if (manager == NULL || manager.GetSymbol() != symbol || manager.GetTimeframe() != tf)
+    {
+        if (manager != NULL)
+            delete manager;
+        manager = new MarketManager(symbol, tf);
+    }
+
+    return manager.IsBreakoutSignal();
+}
+
+bool IsGoodForTrendTrading(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_H1)
+{
+    static MarketManager *manager = NULL;
+
+    if (manager == NULL || manager.GetSymbol() != symbol || manager.GetTimeframe() != tf)
+    {
+        if (manager != NULL)
+            delete manager;
+        manager = new MarketManager(symbol, tf);
+    }
+
+    return manager.IsTrendFollowingSignal();
+}
+
+//+------------------------------------------------------------------+
+//| Market Drawing Manager Class - ADDED TO EXISTING FILE           |
+//+------------------------------------------------------------------+
+class MarketDrawingManager
+{
+private:
+    MarketManager *m_marketManager;
+    long m_chartId;
+    string m_symbol;
+    ENUM_TIMEFRAMES m_timeframe;
+    bool m_enabled;
+
+    // Drawing settings
+    color m_trendUpColor;
+    color m_trendDownColor;
+    color m_rangeColor;
+    color m_oldRangeColor;
+    color m_unknownColor;
+    color m_textColor;
+    color m_rangeFillColor;
+    color m_positionIndicatorColor;
+    int m_fontSize;
+    string m_fontName;
+
+    // Range tracking for visualization
+    RangeInfo m_currentRangeDisplay;
+    RangeInfo m_previousRange;
+    datetime m_rangeStartTime;
+    bool m_hasValidRange;
+    int m_rangeHistoryCount;
+    RangeInfo m_rangeHistory[5]; // Keep last 5 ranges for context
+
+    // Drawing objects tracking
+    datetime m_lastUpdateTime;
+    int m_lastLifecycleState;
+
+public:
+    // Constructor
+    MarketDrawingManager(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_H1)
+    {
+        m_symbol = (symbol == NULL) ? Symbol() : symbol;
+        m_timeframe = tf;
+        m_chartId = ChartID();
+        m_enabled = true;
+
+        // Initialize drawing settings
+        m_trendUpColor = clrLimeGreen;
+        m_trendDownColor = clrRed;
+        m_rangeColor = clrDodgerBlue;
+        m_oldRangeColor = clrGray;
+        m_unknownColor = clrGray;
+        m_textColor = clrWhite;
+        m_rangeFillColor = (color)ColorToARGB(clrDodgerBlue, 10); // Very transparent
+        m_positionIndicatorColor = clrYellow;
+        m_fontSize = 10;
+        m_fontName = "Arial";
+
+        // Initialize range tracking
+        m_currentRangeDisplay = RangeInfo();
+        m_previousRange = RangeInfo();
+        m_rangeStartTime = 0;
+        m_hasValidRange = false;
+        m_rangeHistoryCount = 0;
+
+        // Create MarketManager
+        m_marketManager = new MarketManager(m_symbol, m_timeframe);
+        m_lastUpdateTime = 0;
+        m_lastLifecycleState = LIFECYCLE_UNKNOWN;
+
+        Print("MarketDrawingManager initialized for " + m_symbol + " on " + TimeframeToString(m_timeframe));
+    }
+
+    // Destructor
+    ~MarketDrawingManager()
+    {
+        RemoveAllDrawings();
+        delete m_marketManager;
+    }
+
+    //+------------------------------------------------------------------+
+    //| PUBLIC INTERFACE                                                |
+    //+------------------------------------------------------------------+
+
+    // Enable/disable drawing
+    void EnableDrawing(bool enable = true)
+    {
+        m_enabled = enable;
+        if (!enable)
+            RemoveAllDrawings();
+        else
+            Update(true); // Force update when enabling
+    }
+
+    bool IsDrawingEnabled() const { return m_enabled; }
+
+    // Update and draw current market state
+    void Update(bool force = false)
+    {
+        if (!m_enabled)
+            return;
+
+        // Only update every 30 seconds to prevent flickering
+        if (!force && TimeCurrent() - m_lastUpdateTime < 30)
+            return;
+
+        m_lastUpdateTime = TimeCurrent();
+
+        // Get current market analysis
+        MarketManager::MarketAnalysis analysis = m_marketManager.GetCompleteAnalysis();
+
+        // Get current range and update position percentage
+        RangeInfo currentRange = m_marketManager.GetCurrentRange();
+        if (currentRange.IsValid())
+        {
+            // Calculate current position in range
+            currentRange.currentPosition = currentRange.CalculatePosition(analysis.currentPrice);
+
+            // Check if this is a new range
+            if (!m_currentRangeDisplay.IsValid() ||
+                MathAbs(m_currentRangeDisplay.top - currentRange.top) > 0.0001 ||
+                MathAbs(m_currentRangeDisplay.bottom - currentRange.bottom) > 0.0001)
+            {
+                // Save old range to history
+                if (m_currentRangeDisplay.IsValid())
+                {
+                    SaveRangeToHistory(m_currentRangeDisplay);
                 }
-                
-                // Set defaults for other fields (DecisionEngine can work with defaults)
-                deInterface.weightedScore = freshPackage.overallConfidence;
-                deInterface.orderType = (deInterface.dominantDirection == "BULLISH") ? ORDER_TYPE_BUY : 
-                                       (deInterface.dominantDirection == "BEARISH") ? ORDER_TYPE_SELL : 
-                                       ORDER_TYPE_BUY_LIMIT;
-                deInterface.signalConfidence = freshPackage.overallConfidence;
-                deInterface.signalReason = "6-Component Analysis";
-                
-                // Trade setup defaults (DecisionEngine will calculate if needed)
-                deInterface.entryPrice = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-                deInterface.stopLoss = 0;
-                deInterface.takeProfit1 = 0;
-                deInterface.positionSize = 0.01;
-                
-                // MTF defaults
-                deInterface.mtfBullishCount = (deInterface.dominantDirection == "BULLISH") ? 4 : 2;
-                deInterface.mtfBearishCount = (deInterface.dominantDirection == "BEARISH") ? 4 : 2;
-                deInterface.mtfWeight = freshPackage.overallConfidence;
-                
-                // Send MINIMAL interface to DecisionEngine
-                decisionEngine.ProcessTradePackage(deInterface);
+
+                // Update current range
+                m_currentRangeDisplay = currentRange;
+                m_rangeStartTime = TimeCurrent();
+                m_hasValidRange = true;
+            }
+            else
+            {
+                // Update position in existing range
+                m_currentRangeDisplay.currentPosition = currentRange.currentPosition;
+                m_currentRangeDisplay.touchCount = currentRange.touchCount;
+            }
+        }
+        else
+        {
+            m_hasValidRange = false;
+        }
+
+        // Remove old drawings
+        RemoveAllDrawings();
+
+        // Draw range visualizations if we have valid range
+        if (m_hasValidRange)
+        {
+            DrawRangeInfo(analysis);
+            DrawRangePositionIndicator(); // NEW: Shows real-time % within range
+        }
+
+        DrawTrendInfo(analysis);
+        DrawRangeHistory(); // NEW: Shows previous ranges
+
+        // Update chart
+        ChartRedraw(m_chartId);
+    }
+
+    // Quick status update (less frequent)
+    void OnTimer()
+    {
+        Update(false);
+    }
+
+    //+------------------------------------------------------------------+
+    //| DRAWING METHODS                                                 |
+    //+------------------------------------------------------------------+
+
+private:
+    // Draw range information with enhanced features
+    void DrawRangeInfo(const MarketManager::MarketAnalysis &analysis)
+    {
+        if (!m_currentRangeDisplay.IsValid())
+            return;
+
+        double currentPrice = analysis.currentPrice;
+        double point = SymbolInfoDouble(m_symbol, SYMBOL_POINT);
+
+        // Draw range top
+        string topName = "Range_Top_Line";
+        DrawHorizontalLine(topName, m_currentRangeDisplay.top, m_rangeColor, STYLE_DASH, 2,
+                           StringFormat("Range Top: %.5f (%.2f%%)", m_currentRangeDisplay.top,
+                                        ((m_currentRangeDisplay.top - currentPrice) / currentPrice) * 100.0));
+
+        // Draw range bottom
+        string bottomName = "Range_Bottom_Line";
+        DrawHorizontalLine(bottomName, m_currentRangeDisplay.bottom, m_rangeColor, STYLE_DASH, 2,
+                           StringFormat("Range Bottom: %.5f (%.2f%%)", m_currentRangeDisplay.bottom,
+                                        ((currentPrice - m_currentRangeDisplay.bottom) / currentPrice) * 100.0));
+
+        // Draw range area (semi-transparent)
+        DrawRectangleOnChart("Range_Area", TimeCurrent() - (PeriodSeconds() * 50),
+                             m_currentRangeDisplay.top,
+                             TimeCurrent() + (PeriodSeconds() * 10),
+                             m_currentRangeDisplay.bottom,
+                             ColorToARGB(m_rangeColor, 10),
+                             ColorToARGB(m_rangeColor, 100));
+
+        // Draw range info box with position indicator
+        string rangeInfoText = StringFormat("Range Width: %.2f%%\nTouches: %d\nCurrent Pos: %.1f%%",
+                                            m_currentRangeDisplay.widthPct,
+                                            m_currentRangeDisplay.touchCount,
+                                            m_currentRangeDisplay.currentPosition);
+
+        DrawTextOnChart("Range_Info", TimeCurrent() + (PeriodSeconds() * 15),
+                        m_currentRangeDisplay.bottom + ((m_currentRangeDisplay.top - m_currentRangeDisplay.bottom) * 0.7),
+                        rangeInfoText,
+                        m_rangeColor, m_fontSize, m_fontName, ANCHOR_LEFT_UPPER);
+
+        // Draw percentage scale on the right side
+        DrawRangePercentageScale();
+    }
+
+    // NEW: Draw real-time position indicator within range
+    void DrawRangePositionIndicator()
+    {
+        if (!m_currentRangeDisplay.IsValid())
+            return;
+
+        double rangeHeight = m_currentRangeDisplay.top - m_currentRangeDisplay.bottom;
+        if (rangeHeight <= 0)
+            return;
+
+        // Draw position indicator line at current price
+        // string positionLineName = "Range_Position_Line";
+        // DrawHorizontalLine(positionLineName, iClose(m_symbol, m_timeframe, 0),
+        //                    m_positionIndicatorColor, STYLE_DOT, 2,
+        //                    StringFormat("Current: %.1f%%", m_currentRangeDisplay.currentPosition));
+
+        // Draw percentage markers every 25%
+        for (int i = 25; i <= 75; i += 25)
+        {
+            double priceLevel = m_currentRangeDisplay.bottom + (rangeHeight * i / 100.0);
+            string markerName = "Range_Marker_" + IntegerToString(i);
+            DrawHorizontalLine(markerName, priceLevel, clrDarkGray, STYLE_DOT, 1,
+                               StringFormat("%d%%", i));
+
+            // Add percentage label
+            DrawTextOnChart("Range_Marker_Label_" + IntegerToString(i),
+                            TimeCurrent() + (PeriodSeconds() * 5), priceLevel,
+                            StringFormat("%d%%", i),
+                            clrDarkGray, m_fontSize - 2, m_fontName, ANCHOR_LEFT);
+        }
+    }
+
+    // NEW: Draw percentage scale on chart
+    void DrawRangePercentageScale()
+    {
+        if (!m_currentRangeDisplay.IsValid())
+            return;
+
+        double rangeHeight = m_currentRangeDisplay.top - m_currentRangeDisplay.bottom;
+        if (rangeHeight <= 0)
+            return;
+
+        // Draw vertical percentage bar
+        for (int i = 0; i <= 100; i += 10)
+        {
+            double priceLevel = m_currentRangeDisplay.bottom + (rangeHeight * i / 100.0);
+            string scaleName = "Range_Scale_" + IntegerToString(i);
+
+            // Draw tick mark
+            DrawTextOnChart(scaleName, TimeCurrent() - (PeriodSeconds() * 40), priceLevel,
+                            StringFormat("%d%%", i),
+                            clrGray, m_fontSize - 1, m_fontName, ANCHOR_RIGHT);
+        }
+    }
+
+    // NEW: Save range to history
+    void SaveRangeToHistory(RangeInfo &range)
+    {
+        if (m_rangeHistoryCount >= 5)
+        {
+            // Shift array
+            for (int i = 0; i < 4; i++)
+            {
+                m_rangeHistory[i] = m_rangeHistory[i + 1];
+            }
+            m_rangeHistoryCount = 4;
+        }
+
+        m_rangeHistory[m_rangeHistoryCount] = range;
+        m_rangeHistoryCount++;
+    }
+
+    // NEW: Draw range history
+    void DrawRangeHistory()
+    {
+        for (int i = 0; i < m_rangeHistoryCount; i++)
+        {
+            if (m_rangeHistory[i].IsValid())
+            {
+                // Draw faded range lines for historical ranges
+                string topName = "Range_History_Top_" + IntegerToString(i);
+                string bottomName = "Range_History_Bottom_" + IntegerToString(i);
+
+                DrawHorizontalLine(topName, m_rangeHistory[i].top, m_oldRangeColor, STYLE_DOT, 1,
+                                   StringFormat("Old Range Top (%.2f%%)", m_rangeHistory[i].widthPct));
+                DrawHorizontalLine(bottomName, m_rangeHistory[i].bottom, m_oldRangeColor, STYLE_DOT, 1,
+                                   StringFormat("Old Range Bottom", ""));
+
+                // Faded area
+                DrawRectangleOnChart("Range_History_Area_" + IntegerToString(i),
+                                     TimeCurrent() - (PeriodSeconds() * 100), m_rangeHistory[i].top,
+                                     TimeCurrent() - (PeriodSeconds() * 50), m_rangeHistory[i].bottom,
+                                     ColorToARGB(m_oldRangeColor, 5),
+                                     ColorToARGB(m_oldRangeColor, 30));
             }
         }
     }
-    
-    // DecisionEngine updates
-    decisionEngine.OnTick();
-    
-    // Update display less frequently (every 2 seconds) to prevent blinking
-    if(TimeCurrent() - lastDisplayUpdate >= 2) {
-        lastDisplayUpdate = TimeCurrent();
-        UpdateDisplay();
+
+    // Draw trend information
+    void DrawTrendInfo(const MarketManager::MarketAnalysis &analysis)
+    {
+        TrendInfo trend = m_marketManager.GetCurrentTrend();
+        if (trend.direction == REGIME_UNKNOWN)
+            return;
+
+        // Draw trend info box
+        color trendColor = (trend.direction == REGIME_TRENDING_UP) ? m_trendUpColor : m_trendDownColor;
+
+        DrawTextOnChart("Trend_Info", TimeCurrent() + (PeriodSeconds() * 20),
+                        trend.currentPrice,
+                        StringFormat("Trend: %s\nMove: %.2f%%\nBars: %d",
+                                     (trend.direction == REGIME_TRENDING_UP) ? "UP" : "DOWN",
+                                     trend.totalMovePct,
+                                     trend.trendBars),
+                        trendColor, m_fontSize, m_fontName, ANCHOR_LEFT_UPPER);
+
+        // Draw trend line (simplified - connects start to current)
+        if (trend.trendBars > 5) // Only draw after enough bars
+        {
+            string trendLineName = "Trend_Line";
+            DrawTrendLine(trendLineName, TimeCurrent() - (PeriodSeconds() * trend.trendBars),
+                          trend.startPrice, TimeCurrent(), trend.currentPrice,
+                          trendColor, STYLE_SOLID, 2);
+        }
+
+        // Draw pullback info if applicable
+        double retracePct = trend.GetCurrentRetracementPct();
+        if (retracePct > 10.0) // Significant retracement
+        {
+            DrawTextOnChart("Retracement", TimeCurrent() - (PeriodSeconds() * 2), trend.currentPrice,
+                            StringFormat("Retrace: %.1f%%", retracePct),
+                            (retracePct > 50.0) ? clrOrangeRed : clrOrange,
+                            m_fontSize - 1, m_fontName, ANCHOR_LEFT_LOWER);
+        }
+    }
+
+    //+------------------------------------------------------------------+
+    //| VISUALIZATION HELPERS                                           |
+    //+------------------------------------------------------------------+
+
+    void DrawRangeVisualization()
+    {
+        // Draw dots showing recent price action within range
+        for (int i = 0; i < 20; i++)
+        {
+            double price = iClose(m_symbol, m_timeframe, i);
+            if (m_currentRangeDisplay.IsValid() && m_currentRangeDisplay.IsPriceInside(price))
+            {
+                string dotName = "Range_Dot_" + IntegerToString(i);
+                DrawDot(dotName, TimeCurrent() - (PeriodSeconds() * i), price,
+                        m_rangeColor, 3);
+            }
+        }
+    }
+
+    void DrawTrendVisualization()
+    {
+        TrendInfo trend = m_marketManager.GetCurrentTrend();
+        if (trend.direction == REGIME_UNKNOWN)
+            return;
+
+        // Draw trend momentum dots
+        for (int i = 0; i < 10; i++)
+        {
+            double price = iClose(m_symbol, m_timeframe, i);
+            string dotName = "Trend_Dot_" + IntegerToString(i);
+            DrawDot(dotName, TimeCurrent() - (PeriodSeconds() * i), price,
+                    (trend.direction == REGIME_TRENDING_UP) ? m_trendUpColor : m_trendDownColor,
+                    2);
+        }
+    }
+
+    void DrawPullbackVisualization()
+    {
+        RangeInfo pullback = m_marketManager.GetPullbackRange();
+        if (!pullback.IsValid())
+            return;
+
+        // Draw pullback range
+        string topName = "Pullback_Top_Line";
+        DrawHorizontalLine(topName, pullback.top, clrOrange, STYLE_DOT, 1);
+
+        string bottomName = "Pullback_Bottom_Line";
+        DrawHorizontalLine(bottomName, pullback.bottom, clrOrange, STYLE_DOT, 1);
+
+        // Draw pullback area
+        DrawRectangleOnChart("Pullback_Area", TimeCurrent() - (PeriodSeconds() * 20),
+                             pullback.top, TimeCurrent(), pullback.bottom,
+                             ColorToARGB(clrOrange, 10), ColorToARGB(clrOrange, 50));
+    }
+
+    void DrawBreakoutVisualization()
+    {
+        if (!m_currentRangeDisplay.IsValid())
+            return;
+
+        // Highlight breakout direction
+        double currentPrice = iClose(m_symbol, m_timeframe, 0);
+        color breakoutColor = (currentPrice > m_currentRangeDisplay.top) ? m_trendUpColor : m_trendDownColor;
+
+        // Draw breakout arrow
+        string arrowName = "Breakout_Arrow";
+        double arrowPrice = (currentPrice > m_currentRangeDisplay.top) ? m_currentRangeDisplay.top : m_currentRangeDisplay.bottom;
+        DrawArrow(arrowName, TimeCurrent() - PeriodSeconds(), arrowPrice,
+                  breakoutColor, (currentPrice > m_currentRangeDisplay.top) ? OBJ_ARROW_UP : OBJ_ARROW_DOWN);
+    }
+
+    void DrawTrendResumptionVisualization()
+    {
+        // Draw resumption confirmation dots
+        for (int i = 0; i < 5; i++)
+        {
+            double price = iClose(m_symbol, m_timeframe, i);
+            string dotName = "Resumption_Dot_" + IntegerToString(i);
+            DrawDot(dotName, TimeCurrent() - (PeriodSeconds() * i), price,
+                    clrLimeGreen, 3);
+        }
+    }
+
+    //+------------------------------------------------------------------+
+    //| DRAWING PRIMITIVES                                              |
+    //+------------------------------------------------------------------+
+
+    void DrawText(string name, int x, int y, string text, color clr, int fontSize = 10,
+                  string fontName = "Arial", bool bold = false)
+    {
+        // Delete object if it exists
+        if (ObjectFind(m_chartId, name) >= 0)
+            ObjectDelete(m_chartId, name);
+
+        ObjectCreate(m_chartId, name, OBJ_LABEL, 0, 0, 0);
+        ObjectSetInteger(m_chartId, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+        ObjectSetInteger(m_chartId, name, OBJPROP_XDISTANCE, x);
+        ObjectSetInteger(m_chartId, name, OBJPROP_YDISTANCE, y);
+        ObjectSetString(m_chartId, name, OBJPROP_TEXT, text);
+        ObjectSetInteger(m_chartId, name, OBJPROP_COLOR, clr);
+        ObjectSetInteger(m_chartId, name, OBJPROP_FONTSIZE, fontSize);
+
+        if (bold)
+            ObjectSetString(m_chartId, name, OBJPROP_FONT, "Arial Bold");
+        else
+            ObjectSetString(m_chartId, name, OBJPROP_FONT, fontName);
+
+        ObjectSetInteger(m_chartId, name, OBJPROP_BACK, false);
+        ObjectSetInteger(m_chartId, name, OBJPROP_SELECTABLE, false);
+    }
+
+    void DrawTextOnChart(string name, datetime time, double price, string text,
+                         color clr, int fontSize = 10, string fontName = "Arial",
+                         ENUM_ANCHOR_POINT anchor = ANCHOR_CENTER)
+    {
+        ObjectCreate(m_chartId, name, OBJ_TEXT, 0, time, price);
+        ObjectSetString(m_chartId, name, OBJPROP_TEXT, text);
+        ObjectSetInteger(m_chartId, name, OBJPROP_COLOR, clr);
+        ObjectSetInteger(m_chartId, name, OBJPROP_FONTSIZE, fontSize);
+        ObjectSetString(m_chartId, name, OBJPROP_FONT, fontName);
+        ObjectSetInteger(m_chartId, name, OBJPROP_ANCHOR, anchor);
+        ObjectSetInteger(m_chartId, name, OBJPROP_BACK, false);
+        ObjectSetInteger(m_chartId, name, OBJPROP_SELECTABLE, false);
+    }
+
+    void DrawRectangle(string name, int x1, int y1, int x2, int y2,
+                       color bgColor, color borderColor)
+    {
+        ObjectCreate(m_chartId, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+        ObjectSetInteger(m_chartId, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+        ObjectSetInteger(m_chartId, name, OBJPROP_XDISTANCE, x1);
+        ObjectSetInteger(m_chartId, name, OBJPROP_YDISTANCE, y1);
+        ObjectSetInteger(m_chartId, name, OBJPROP_XSIZE, x2 - x1);
+        ObjectSetInteger(m_chartId, name, OBJPROP_YSIZE, y2 - y1);
+        ObjectSetInteger(m_chartId, name, OBJPROP_BGCOLOR, bgColor);
+        ObjectSetInteger(m_chartId, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+        ObjectSetInteger(m_chartId, name, OBJPROP_BORDER_COLOR, borderColor);
+        ObjectSetInteger(m_chartId, name, OBJPROP_BACK, true);
+        ObjectSetInteger(m_chartId, name, OBJPROP_SELECTABLE, false);
+    }
+
+    void DrawRectangleOnChart(string name, datetime time1, double price1,
+                              datetime time2, double price2, color bgColor, color borderColor)
+    {
+        ObjectCreate(m_chartId, name, OBJ_RECTANGLE, 0, time1, price1, time2, price2);
+        ObjectSetInteger(m_chartId, name, OBJPROP_COLOR, borderColor);
+        ObjectSetInteger(m_chartId, name, OBJPROP_BGCOLOR, bgColor);
+        ObjectSetInteger(m_chartId, name, OBJPROP_BACK, true);
+        ObjectSetInteger(m_chartId, name, OBJPROP_SELECTABLE, false);
+    }
+
+    void DrawHorizontalLine(string name, double price, color clr, ENUM_LINE_STYLE style = STYLE_SOLID,
+                            int width = 1, string description = "")
+    {
+        ObjectCreate(m_chartId, name, OBJ_HLINE, 0, 0, price);
+        ObjectSetDouble(m_chartId, name, OBJPROP_PRICE, price);
+        ObjectSetInteger(m_chartId, name, OBJPROP_COLOR, clr);
+        ObjectSetInteger(m_chartId, name, OBJPROP_STYLE, style);
+        ObjectSetInteger(m_chartId, name, OBJPROP_WIDTH, width);
+        ObjectSetInteger(m_chartId, name, OBJPROP_BACK, true);
+        ObjectSetInteger(m_chartId, name, OBJPROP_SELECTABLE, false);
+
+        if (description != "")
+        {
+            ObjectSetString(m_chartId, name, OBJPROP_TOOLTIP, description);
+        }
+    }
+
+    void DrawTrendLine(string name, datetime time1, double price1,
+                       datetime time2, double price2, color clr,
+                       ENUM_LINE_STYLE style = STYLE_SOLID, int width = 1)
+    {
+        ObjectCreate(m_chartId, name, OBJ_TREND, 0, time1, price1, time2, price2);
+        ObjectSetInteger(m_chartId, name, OBJPROP_COLOR, clr);
+        ObjectSetInteger(m_chartId, name, OBJPROP_STYLE, style);
+        ObjectSetInteger(m_chartId, name, OBJPROP_WIDTH, width);
+        ObjectSetInteger(m_chartId, name, OBJPROP_BACK, true);
+        ObjectSetInteger(m_chartId, name, OBJPROP_SELECTABLE, false);
+        ObjectSetInteger(m_chartId, name, OBJPROP_RAY, false);
+    }
+
+    void DrawDot(string name, datetime time, double price, color clr, int size = 3)
+    {
+        ObjectCreate(m_chartId, name, OBJ_ARROW, 0, time, price);
+        ObjectSetInteger(m_chartId, name, OBJPROP_ARROWCODE, 108);
+        ObjectSetInteger(m_chartId, name, OBJPROP_COLOR, clr);
+        ObjectSetInteger(m_chartId, name, OBJPROP_WIDTH, size);
+        ObjectSetInteger(m_chartId, name, OBJPROP_BACK, false);
+        ObjectSetInteger(m_chartId, name, OBJPROP_SELECTABLE, false);
+    }
+
+    void DrawArrow(string name, datetime time, double price, color clr, int arrowCode)
+    {
+        // Delete object if it exists
+        if (ObjectFind(m_chartId, name) >= 0)
+            ObjectDelete(m_chartId, name);
+
+        ObjectCreate(m_chartId, name, OBJ_ARROW, 0, time, price);
+        ObjectSetInteger(m_chartId, name, OBJPROP_ARROWCODE, arrowCode);
+        ObjectSetInteger(m_chartId, name, OBJPROP_COLOR, clr);
+        ObjectSetInteger(m_chartId, name, OBJPROP_WIDTH, 2);
+        ObjectSetInteger(m_chartId, name, OBJPROP_BACK, false);
+        ObjectSetInteger(m_chartId, name, OBJPROP_SELECTABLE, false);
+    }
+
+    void DrawStrengthBar(string name, int x, int y, double strength, string label, color clr)
+    {
+        // Draw label
+        DrawText(name + "_Label", x, y, label, m_textColor, m_fontSize - 1, m_fontName);
+
+        // Draw background bar
+        int barWidth = 100;
+        int barHeight = 8;
+        DrawRectangle(name + "_BG", x + 90, y - 2, x + 90 + barWidth, y + barHeight + 2,
+                      clrDarkGray, clrDarkGray);
+
+        // Draw strength bar (absolute value for display)
+        int fillWidth = (int)(barWidth * (MathAbs(strength) / 100.0));
+        if (fillWidth > 0)
+        {
+            DrawRectangle(name + "_Fill", x + 90, y - 2, x + 90 + fillWidth, y + barHeight + 2,
+                          clr, clr);
+        }
+
+        // Draw strength value with sign
+        string sign = strength >= 0 ? "+" : "";
+        DrawText(name + "_Value", x + 90 + barWidth + 5, y,
+                 StringFormat("%s%.0f", sign, strength), clr, m_fontSize - 1, m_fontName);
+    }
+
+    void RemoveAllDrawings()
+    {
+        int total = ObjectsTotal(m_chartId);
+        for (int i = total - 1; i >= 0; i--)
+        {
+            string name = ObjectName(m_chartId, i);
+            if (StringFind(name, "Market_") == 0 ||
+                StringFind(name, "Range_") == 0 ||
+                StringFind(name, "Trend_") == 0 ||
+                StringFind(name, "Lifecycle_") == 0 ||
+                StringFind(name, "Pullback_") == 0 ||
+                StringFind(name, "Breakout_") == 0 ||
+                StringFind(name, "Resumption_") == 0)
+            {
+                ObjectDelete(m_chartId, name);
+            }
+        }
+    }
+
+    //+------------------------------------------------------------------+
+    //| HELPER FUNCTIONS                                                |
+    //+------------------------------------------------------------------+
+
+    color GetRegimeColor(ENUM_MARKET_REGIME regime)
+    {
+        switch (regime)
+        {
+        case REGIME_TRENDING_UP:
+            return m_trendUpColor;
+        case REGIME_TRENDING_DOWN:
+            return m_trendDownColor;
+        case REGIME_RANGING:
+            return m_rangeColor;
+        default:
+            return m_unknownColor;
+        }
+    }
+
+    color GetLifecycleColor(ENUM_MARKET_LIFECYCLE state)
+    {
+        switch (state)
+        {
+        case LIFECYCLE_RANGE_FORMING:
+        case LIFECYCLE_RANGE_ACTIVE:
+            return m_rangeColor;
+
+        case LIFECYCLE_BREAKOUT_DETECTED:
+            return clrOrange;
+
+        case LIFECYCLE_TREND_CONFIRMED:
+        case LIFECYCLE_TREND_RESUMING:
+            return m_trendUpColor;
+
+        case LIFECYCLE_PULLBACK_FORMING:
+        case LIFECYCLE_PULLBACK_ACTIVE:
+            return clrOrangeRed;
+
+        case LIFECYCLE_TREND_WEAKENING:
+            return clrYellow;
+
+        default:
+            return m_unknownColor;
+        }
+    }
+
+    // NEW: Get color based on position in range
+    color GetPositionColor(double position)
+    {
+        if (position < 20)
+            return clrRed; // Near bottom - oversold
+        if (position > 80)
+            return clrLimeGreen; // Near top - overbought
+        if (position < 40)
+            return clrOrange; // Lower half
+        if (position > 60)
+            return clrDodgerBlue; // Upper half
+        return clrYellow;         // Middle
+    }
+
+    string GetRegimeString(ENUM_MARKET_REGIME regime)
+    {
+        switch (regime)
+        {
+        case REGIME_TRENDING_UP:
+            return "TRENDING UP";
+        case REGIME_TRENDING_DOWN:
+            return "TRENDING DOWN";
+        case REGIME_RANGING:
+            return "RANGING";
+        default:
+            return "UNKNOWN";
+        }
+    }
+
+    string TimeframeToString(ENUM_TIMEFRAMES tf)
+    {
+        switch (tf)
+        {
+        case PERIOD_M1:
+            return "M1";
+        case PERIOD_M5:
+            return "M5";
+        case PERIOD_M15:
+            return "M15";
+        case PERIOD_M30:
+            return "M30";
+        case PERIOD_H1:
+            return "H1";
+        case PERIOD_H4:
+            return "H4";
+        case PERIOD_D1:
+            return "D1";
+        case PERIOD_W1:
+            return "W1";
+        case PERIOD_MN1:
+            return "MN";
+        default:
+            return IntegerToString(tf);
+        }
+    }
+
+    // Convert color to ARGB with alpha transparency
+    uint ColorToARGB(color clr, uchar alpha = 255)
+    {
+        return ((uint)alpha << 24) | ((uint)clr & 0xFFFFFF);
+    }
+};
+
+//+------------------------------------------------------------------+
+//| Global Market Drawing Functions - ADDED TO EXISTING FILE        |
+//+------------------------------------------------------------------+
+
+// Global instance for easy access
+MarketDrawingManager *g_marketDrawer = NULL;
+
+// Initialize market drawing
+void InitializeMarketDrawing(string symbol = NULL, ENUM_TIMEFRAMES tf = PERIOD_H1)
+{
+    if (g_marketDrawer != NULL)
+    {
+        delete g_marketDrawer;
+    }
+
+    g_marketDrawer = new MarketDrawingManager(symbol, tf);
+    Print("Market Drawing initialized");
+}
+
+// Update market drawing
+void UpdateMarketDrawing(bool force = false)
+{
+    if (g_marketDrawer != NULL)
+    {
+        g_marketDrawer.Update(force);
     }
 }
 
-// ============================================================
-// TIMER HANDLER
-// ============================================================
-void OnTimer()
+// Toggle market drawing
+void ToggleMarketDrawing(bool enable)
 {
-    if(POI_Enabled) poiModule.OnTimer();
-    
-    if(g_packageManager != NULL && g_packageManager.IsInitialized()) {
-        g_packageManager.OnTimer();
+    if (g_marketDrawer != NULL)
+    {
+        g_marketDrawer.EnableDrawing(enable);
     }
-    
-    if(g_indicatorManager != NULL) {
-        g_indicatorManager.OnTimer();
-    }
-    
-    decisionEngine.OnTimer();
 }
 
-// ============================================================
-// CLEANUP FUNCTION
-// ============================================================
-void OnDeinit(const int reason)
+// Cleanup market drawing
+void CleanupMarketDrawing()
 {
-    Print("=== DEINITIALIZING mk$ EA v3.00 ===");
-    
-    EventKillTimer();
-    
-    // Clear any display
-    Comment("");
-    
-    if(g_packageManager != NULL) delete g_packageManager;
-    if(g_indicatorManager != NULL) {
-        g_indicatorManager.Deinitialize();
-        delete g_indicatorManager;
+    if (g_marketDrawer != NULL)
+    {
+        delete g_marketDrawer;
+        g_marketDrawer = NULL;
     }
-    
-    decisionEngine.Deinitialize();
-    Logger::Shutdown();
-    
-    Print("✅ DEINITIALIZATION COMPLETE");
 }
 
-// ============================================================
-// TRADE TRANSACTION HANDLER
-// ============================================================
-void OnTradeTransaction(const MqlTradeTransaction& trans,
-                       const MqlTradeRequest& request,
-                       const MqlTradeResult& result)
+// Simple function to check if drawing is enabled
+bool IsMarketDrawingEnabled()
 {
-    if(POI_Enabled) poiModule.OnTradeTransaction(trans, request, result);
-    decisionEngine.OnTradeTransaction(trans, request, result);
+    return g_marketDrawer != NULL && g_marketDrawer.IsDrawingEnabled();
 }
+
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+
+
+Recreate this file to be simple as it now has too many things going on.
+i am thinking one file rather than so many different classes. just one properly thought of but simple file.
+
+REGIME SIMPLE LOGIC:
+
+Complete Market Regime Framework: States, Lifecycle, Trading Rules & Display:
+
+getMarketRegime()
+    first establish a width:
+        price high/low in last few bars "5 bars" using H1. 
+            this then becomes a fixed range till invalidated.
+            when formed the drawing is displayed and when invalidated then no drawing.
+        QUICKLY:
+            CHECK for state:
+                1. ADX/BB/MAs/CANDLES/VOLUME/ATR/OTHER RELEVANT INDICATORS: 
+                ADX:
+                - < 20 → Ranging/Contraction
+                - 25-40 → Trending
+                - > 40 → Exhaustion Risk
+                ATR/Bollinger Width:
+                - Low & falling → Contraction/Squeeze
+                - Low & rising → Early Trend
+                - High & rising → Late Trend/Expansion
+                - High & stable → Range High Vol
+
+                2. Structure:
+                - HH/HL or LH/LL → Trending
+                - Horizontal S/R → Ranging
+                - Failed extremes → Churn/Exhaustion
+
+            return the state //could be trending with low volatility and rising...
+
+
+        Then anticipate next most likely move instead of react, ie:
+            - Tight candles after long range? → Phase 1 (ACTION_ONE)
+            - Just broke out? → Phase 2 (ACTION_TWO)
+            - Steady move with pullbacks? → Phase 3 (ACTION_THREE)
+            - Parabolic, everyone talking? → Phase 4 (ACTION_FOUR)
+            - Wide bars, no progress? → Phase 5/6 (ACTION_FIVE)
+
+    then from the fixed width: 
+    return marketState and nextMostLikelyProgression
+
+
+REGIME SIMPLE LOGIC IMPLIMENTATION LOGIC:
+
+check for the state we are in:
+    1. Ranging – Low Volatility (State 1)
+        * Volatility: Low & Stable
+        * Character: Consolidation, equilibrium, boredom
+        * Price/Indicators: 
+            - Tight candles inside horizontal S/R
+            - Flat MAs (50,89), ADX < 20, ATR low & flat
+            - Bollinger Bands squeezed
+        * Tradability: High for mean reversion
+        * Direction: Neutral
+        * Maturity: Late-stage - range established, awaiting catalyst
+        * Lifecycle Position: Phase 1/7 - Beginning or end of cycle
+        * Trading Rules:
+            - Fade range extremes with tight stops
+            - Prepare breakout alerts above/below range
+            - Reduce position size as range matures
+            - Wait for volatility contraction (next phase)
+
+    ---
+
+    2. Contraction/Squeeze (State 5)
+        * Volatility: Low & Falling
+        * Character: Coiling, compression, indecision
+        * Price/Indicators:
+            - Extremely tight candles (doji, spinning tops)
+            - Bollinger Bands width at multi-period low
+            - ADX < 15, ATR at lows
+        * Tradability: Prepare, dont trade - no edge until breakout
+        * Direction: Neutral (latent)
+        * Maturity: Transition - energy building for next move
+        * Lifecycle Position: Phase 1 → Phase 2 transition
+        * Trading Rules:
+            - Set breakout alerts
+            - Prepare capital allocation for next move
+            - Avoid fading range edges now
+            - Wait for the expansion candle
+
+    ---
+
+    3. Expansion/Breakout Test (State 6)
+        * Volatility: High & Rising
+        * Character: Breakout attempt, momentum surge
+        * Price/Indicators:
+            - Large candle breaking key level
+            - Volume spike, ATR jumps
+            - ADX may still be low but rising
+        * Tradability: Conditional - true vs false break decision
+        * Direction: Emerging
+        * Maturity: Infant stage - new trend may be born
+        * Lifecycle Position: Phase 2 - Breakout Decision Point
+        * Trading Rules:
+            - Wait for close beyond range (not just wick)
+            - Dont chase - let price retest breakout level
+            - Confirm with follow-through candle
+            - Beware low-volume breaks (traps)
+
+    ---
+
+    4. Trending – Low Volatility (State 3)
+        * Volatility: Low & Rising
+        * Character: Healthy, institutional trend
+        * Price/Indicators:
+            - Steady candles in one direction
+            - MAs aligned as dynamic S/R
+            - ADX rising (25-40), ATR gradually increasing
+        * Tradability: Very High - ideal conditions
+        * Direction: Strong (Up/Down)
+        * Maturity: Early to Mid-stage - established but not crowded
+        * Lifecycle Position: Phase 3 - Trend Birth & Acceptance
+        * Trading Rules:
+            - Enter on first pullback to breakout level
+            - Add to position on subsequent higher lows
+            - Use loose trailing stops
+            - This is highest probability phase
+
+    ---
+
+        5. Trending – High Volatility (State 4)
+        * Volatility: High & Expanding
+        * Character: Climactic, emotional, parabolic
+        * Price/Indicators:
+            - Large candles, gaps, exhaustion patterns
+            - ADX > 40, ATR spiking
+            - MAs far from price
+        * Tradability: Low - caution, reversal risk high
+        * Direction: Strong but weakening
+        * Maturity: Late-stage - overextended, smart money distributing
+        * Lifecycle Position: Phase 4 - Trend Maturity & Euphoria
+        * Trading Rules:
+            - Take partial profits (25-50%)
+            - Tighten stops to protect gains
+            - No new entries
+            - Watch for exhaustion patterns
+
+    ---
+
+    6. Churn/Exhaustion (State 7)
+        * Volatility: High & Unstable
+        * Character: Directionless volatility, distribution
+        * Price/Indicators:
+            - Large, overlapping candles, no progress
+            - ADX falling from >40, ATR erratic
+            - Broadening formation patterns
+        * Tradability: Avoid - whipsaw kills accounts
+        * Direction: Neutralizing
+        * Maturity: Terminal stage - old trend dying
+        * Lifecycle Position: Phase 5 - Distribution & Exhaustion
+        * Trading Rules:
+            - Exit remaining positions
+            - Prepare to fade extremes (small size only)
+            - Shift to range/reversal mindset
+            - Set alerts for key breaks
+
+    ---
+
+    7. Ranging – High Volatility (State 2)
+        * Volatility: High & Stable
+        * Character: Choppy, emotional swings within bounds
+        * Price/Indicators:
+            - Wide candles but failing at S/R
+            - High ATR, ADX still low (<25)
+            - Volume spikes at edges
+        * Tradability: Low - dangerous, stop hunts frequent
+        * Direction: Neutral
+        * Maturity: Mid-stage - unstable, may precede expansion/contraction
+        * Lifecycle Position: Phase 6 Path B or Phase 7 early
+        * Trading Rules:
+            - Fade extremes but expect stop runs
+            - Very tight stops if trading
+            - Better to wait for stabilization
+            - This is the "trap zone"
+
+    ---
+
+ONCE STATE IS UNDERSTOOD THEN CRITICAL TRANSITIONS & DECISION POINTS
+
+    ---
+
+    NEXT MOST LIKELY PROGRESSION
+
+Root State        | Current State         | Direction if applicable | Next Likely States                            | YOUR RECOMMENDATION       | Position Size | Stop Placement |RR-recomendation
+|---------------  |---------------        |-----------------        |-----------------                              |-------------              |---------------|----------------|----------------
+REGIME_RANGING    | Ranging Low Vol       | Direction if applicable | Contraction (5) or Range High Vol (2)         | Fade edges                | Small         | Very tight     |RR-recomendation
+REGIME_UNKNOWN    | Contraction           | Direction if applicable | Expansion (6)                                 | Wait for break            | Zero          | N/A            |RR-recomendation
+REGIME_TRENDING   | Expansion             | Direction if applicable | Trending Low Vol (3) or Range High Vol (2)    | Test entry                | Medium        | Below breakout |RR-recomendation
+REGIME_TRENDING   | Trending Low Vol      | Direction if applicable | Trending High Vol (4)                         | Add to winners            | Large         | Loose trailing |RR-recomendation
+REGIME_TRENDING   | Trending High Vol     | Direction if applicable | Churn (7)                                     | Take profits              | Reducing      | Tightening     |RR-recomendation
+REGIME_UNKNOWN    | Churn                 | Direction if applicable | Range High Vol (2) or Trending Low Vol (3)    | Wait for clarity          | Zero          | N/A            |RR-recomendation
+REGIME_RANGING    | Range High Vol        | Direction if applicable | Range Low Vol (1)                             | Fade carefully            | Very small    | Extremely tight|RR-recomendation
+
+    ---
+
+
+
+
+
+
+    
+so the regime basically comes with:
+0. rootState
+1. state.
+2. next most likely state.
+3. action recommendattion.
+4. position size recommendation, also base this on acount size and symbol.
+5. tp/sl recommendation, also base this on acount size and symbol.
+6. risk to reward recommendation.
+7. Direction recommendation

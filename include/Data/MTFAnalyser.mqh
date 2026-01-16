@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                                      MTFAnalyser  |
 //|                 Multi-timeframe analysis and alignment           |
-//|                   Updated to remove TradePackage dependency      |
+//|                   Updated to remove TrendPackage dependency      |
 //+------------------------------------------------------------------+
 
 #include "../Utils/Logger.mqh"
@@ -9,7 +9,7 @@
 #include "IndicatorManager.mqh"
 
 // ====================== DEBUG SETTINGS ======================
-bool DEBUG_ENABLED_MTF = true;
+bool DEBUG_ENABLED_MTF = false;
 
 // Simple debug function using Logger
 void DebugLogMTF(string context, string message) {
@@ -252,35 +252,35 @@ public:
    }
    
    // Display chart comment using Logger functions - RESTORED ORIGINAL
-   void DisplayChartComment(const MTFScore &score)
-   {
-      // Only update every 2 seconds to avoid flickering
-      if(TimeCurrent() - m_lastDisplayTime < 2)
-         return;
+   // void DisplayChartComment(const MTFScore &score)
+   // {
+   //    // Only update every 2 seconds to avoid flickering
+   //    if(TimeCurrent() - m_lastDisplayTime < 2)
+   //       return;
          
-      m_lastDisplayTime = TimeCurrent();
+   //    m_lastDisplayTime = TimeCurrent();
       
-      string signal = "HOLD";
-      if(score.bullishTFCount > score.bearishTFCount && score.bullishTFCount > score.neutralTFCount)
-         signal = "BUY";
-      else if(score.bearishTFCount > score.bullishTFCount && score.bearishTFCount > score.neutralTFCount)
-         signal = "SELL";
+   //    string signal = "HOLD";
+   //    if(score.bullishTFCount > score.bearishTFCount && score.bullishTFCount > score.neutralTFCount)
+   //       signal = "BUY";
+   //    else if(score.bearishTFCount > score.bullishTFCount && score.bearishTFCount > score.neutralTFCount)
+   //       signal = "SELL";
       
-      // Create a single frame display - ORIGINAL EXACTLY
-      string displayText = StringFormat("MTF Analyzer: %s\nScore: %.1f%% (Weighted: %.1f%%)\nBullish: %d(%.1f) | Bearish: %d(%.1f) | Neutral: %d\n%s",
-                                        signal, score.score, score.weightedScore,
-                                        score.bullishTFCount, score.bullishWeightedScore,
-                                        score.bearishTFCount, score.bearishWeightedScore,
-                                        score.neutralTFCount,
-                                        score.summary);
+   //    // Create a single frame display - ORIGINAL EXACTLY
+   //    string displayText = StringFormat("MTF Analyzer: %s\nScore: %.1f%% (Weighted: %.1f%%)\nBullish: %d(%.1f) | Bearish: %d(%.1f) | Neutral: %d\n%s",
+   //                                      signal, score.score, score.weightedScore,
+   //                                      score.bullishTFCount, score.bullishWeightedScore,
+   //                                      score.bearishTFCount, score.bearishWeightedScore,
+   //                                      score.neutralTFCount,
+   //                                      score.summary);
       
-      // Use the single frame display method
-      // Logger::DisplaySingleFrame(displayText);
+   //    // Use the single frame display method
+   //    // Logger::DisplaySingleFrame(displayText);
       
-      // Also log the analysis
-      // Logger::Log("MTFAnalyser", StringFormat("Analysis: %s | Score: %.1f%% | Weighted: %.1f%%", 
-                  // signal, score.score, score.weightedScore));
-   }
+   //    // Also log the analysis
+   //    // Logger::Log("MTFAnalyser", StringFormat("Analysis: %s | Score: %.1f%% | Weighted: %.1f%%", 
+   //                // signal, score.score, score.weightedScore));
+   // }
    
    // NEW: Main analysis method that returns comprehensive analysis result
    MTFAnalysisResult GetAnalysis(string symbol = NULL, double minAlignmentScore = 60.0)

@@ -57,7 +57,7 @@ private:
         datetime currentTime = TimeCurrent();
         if (currentTime - lastChartUpdate >= chartUpdateFrequency)
         {
-            Comment(chartBuffer);
+            // Comment(chartBuffer);
             lastChartUpdate = currentTime;
         }
     }
