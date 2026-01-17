@@ -44,7 +44,7 @@ public:
       m_symbol = (symbol == NULL) ? Symbol() : symbol;
       m_timeframe = tf;
       m_rangeActive = false;
-      m_lookbackBars = 24;
+      m_lookbackBars = 8;
       m_accountBalance = accountBalance;
       m_accountRiskPercent = riskPercent;
       m_useIndicatorManager = useIndicatorManager;
@@ -200,7 +200,7 @@ private:
 
    void InitializeFixedRange()
    {
-      int bars = 5; // Fixed 5-bar lookback for initial range
+      int bars = 8; // Fixed 5-bar lookback for initial range
       double highest = 0;
       double lowest = DBL_MAX;
 

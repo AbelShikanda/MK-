@@ -125,7 +125,7 @@ public:
 
         display += SeparatorLine();
 
-        display += StringFormat("|%s|%s|%s|\n",
+        display += StringFormat("| %s|%s|%s|\n",
                                 PadRight(m_symbol, 10),
                                 PadRight(TimeframeToString(Period()), 4),
                                 GetTradingSessionShort());
@@ -185,7 +185,7 @@ private:
         double margin = AccountInfoDouble(ACCOUNT_MARGIN);
         double marginLevel = margin > 0 ? equity / margin * 100 : 0;
 
-        return StringFormat("Account: $%.0f | Eq: $%.0f | ML: %.1f%% | %s\n",
+        return StringFormat("| Account      : $%.0f | Eq: $%.0f | ML: %.1f%% | %s\n",
                             balance, equity, marginLevel, GetTradingSessionShort());
     }
 
@@ -202,12 +202,12 @@ private:
             string state = MarketAnalysis::GetStateString(analysis.state);
             string nextState = MarketAnalysis::GetStateString(analysis.nextLikelyState);
 
-            section += StringFormat("Sig: %s | %s -> %s\n",
+            section += StringFormat("| Signal       : %s | %s -> %s\n",
                                     rootState, state, nextState);
         }
         else
         {
-            section += "Signal: NO_DATA | NO_DATA -> NO_DATA\n";
+            section += "| Signal        : NO_DATA | NO_DATA -> NO_DATA\n";
         }
 
         return section;
@@ -223,15 +223,15 @@ private:
 
             if (lastPackage.IsValid())
             {
-                string packageType = lastPackage.IsRangePackage() ? "Range" : "Trend";
+                string packageType = lastPackage.IsRangePackage() ? "Range Package" : "Trend Package";
                 string direction = ConvertDirection(lastPackage.dominantDirection);
 
-                section += StringFormat("Pkg: %s | %s | Conf: %.0f%%\n",
+                section += StringFormat("| Package      : %s | %s | Conf: %.0f%%\n",
                                         packageType, direction, lastPackage.overallConfidence);
             }
             else
             {
-                section += "Package: NONE | NONE | Conf: 0%\n";
+                section += "| Package       : NONE | NONE | Conf: 0%\n";
             }
         }
 
@@ -251,13 +251,13 @@ private:
         if (regime.IsTrending())
         {
             // Display trend components
-            section += "Trend Info: ";
+            section += "| Trend Info        : ";
             if (lastPackage.IsValid())
             {
                 // Simple component display - in real implementation, you would extract these from modules
-                section += "MTF/" + GetDirectionSymbol(lastPackage.dominantDirection) + "/80% ";
-                section += "POI/" + GetDirectionSymbol(lastPackage.dominantDirection) + "/75% ";
-                section += "RSI/" + GetDirectionSymbol(lastPackage.dominantDirection) + "/70%";
+                section += "| MTF/" + GetDirectionSymbol(lastPackage.dominantDirection) + "/80% ";
+                section += "| POI/" + GetDirectionSymbol(lastPackage.dominantDirection) + "/75% ";
+                section += "| RSI/" + GetDirectionSymbol(lastPackage.dominantDirection) + "/70%";
             }
             section += "\n";
         }
@@ -273,13 +273,16 @@ private:
                 if (top > bottom)
                 {
                     double positionPercent = ((currentPrice - bottom) / (top - bottom)) * 100;
-                    section += StringFormat("Range Info: %.2f-%.2f | Pos: %.0f%%\n",
+                    section += StringFormat("| Range Info       : %.2f-%.2f | Pos: %.0f%%\n",
                                             bottom, top, positionPercent);
                 }
             }
 
+            
+            section += "-----------------------------------------------------------------------------------------------------------------\n";
+
             // Display range components
-            section += "Comp: COMP1/B/40% COMP2/B/40% COMP3/B/40%\n";
+            section += "| Comp: COMP1/B/40% COMP2/B/40% COMP3/B/40%\n";
         }
 
         return section;
@@ -293,7 +296,7 @@ private:
         {
             MarketAnalysis analysis = m_regimeDetector.GetMarketRegime();
 
-            section += StringFormat("Setup: %s | SL: %.1f | TP: %.1f | RR: %.1f\n",
+            section += StringFormat("| Setup        : %s | SL: %.1f | TP: %.1f | RR: %.1f\n",
                                     GetPositionSizeShort(analysis.positionSize),
                                     analysis.stopDistance,
                                     analysis.takeProfitDistance,
@@ -301,7 +304,7 @@ private:
         }
         else
         {
-            section += "Setup: NONE | SL: 0.0 | TP: 0.0 | RR: 0.0\n";
+            section += "| Setup     : NONE | SL: 0.0 | TP: 0.0 | RR: 0.0\n";
         }
 
         return section;
@@ -325,7 +328,7 @@ private:
             else if (analysis.state == STATE_CONTRACTION)
                 warning = "Small Stops ";
 
-            section += StringFormat("Action: %s%s\n", warning, action);
+            section += StringFormat("| Action       : %s%s\n", warning, action);
         }
 
         return section;
@@ -340,9 +343,9 @@ private:
             MarketAnalysis analysis = m_regimeDetector.GetMarketRegime();
 
             // Truncate description to fit
-            string shortDesc = TruncateString(analysis.description, 60);
+            string shortDesc = TruncateString(analysis.description, 100);
 
-            section += StringFormat("Description: %s\n", shortDesc);
+            section += StringFormat("| Description  : %s\n", shortDesc);
         }
 
         return section;
@@ -362,11 +365,15 @@ private:
             int positionCount = GetPositionCount();
             string positionStr = positionCount > 0 ? StringFormat("%d Positions", positionCount) : "NO_POS";
 
-            section += StringFormat("Decision: %s | %s", decisionStr, positionStr);
+            // Get position count
+            string positiondir = GetDirectionSymbol((string)lastDecision);
+            string direction = positionCount > 0 ? positiondir : "NO_DIR"; 
+
+            section += StringFormat("| Decision     : %s | %s | %s", decisionStr, positionStr, direction);
         }
         else
         {
-            section += "Decision: NONE | NO_POS";
+            section += "| Decision      : NONE | NO_POS | NO_DIR";
         }
 
         // Statistics
@@ -599,7 +606,7 @@ private:
 
     string SeparatorLine()
     {
-        return "--------------------------------------------------------------------\n";
+        return "-----------------------------------------------------------------------------------------------------------------\n";
     }
 
     string TruncateString(string text, int maxLength)

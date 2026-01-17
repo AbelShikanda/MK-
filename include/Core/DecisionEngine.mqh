@@ -105,19 +105,19 @@ struct DecisionParams
     double trendSellThreshold;
     double trapProbabilityThreshold;
 
-    DecisionParams(double buyThresh = 60.0,
-                   double sellThresh = 60.0,
+    DecisionParams(double buyThresh = 70.0,
+                   double sellThresh = 70.0,
                    double closeThresh = 40.0,
                    double closeAllThresh = 40.0,
                    int cooldownMins = 30,
                    int maxPositions = 2,
                    double riskPct = 20.0,
                    double minRR = 1.0,
-                   double rangeBuy = 60.0,
-                   double rangeSell = 60.0,
-                   double trendBuy = 60.0,
-                   double trendSell = 60.0,
-                   double trapProb = 60.0)
+                   double rangeBuy = 75.0,
+                   double rangeSell = 80.0,
+                   double trendBuy = 70.0,
+                   double trendSell = 70.0,
+                   double trapProb = 75.0)
     {
         buyConfidenceThreshold = buyThresh;
         sellConfidenceThreshold = sellThresh;
@@ -388,22 +388,11 @@ struct DecisionMetrics
             return;
         }
 
-        int prevTotal = totalDecisions;
-        totalDecisions++;
+        // ⚠️ IMPORTANT: This method should ONLY be called from ProcessClosedTradeProfitability()
+        // after we know if the trade was profitable or not
 
-        if (wasProfitable)
-        {
-            profitableDecisions++;
-            DebugLogFile("METRICS_PROFITABLE",
-                         StringFormat("✅ Profitable trade: %s | Conf: %.1f%% | Processor: %s",
-                                      DecisionToStringStatic(decision), confidence, processorType));
-        }
-        else
-        {
-            DebugLogFile("METRICS_UNPROFITABLE",
-                         StringFormat("❌ Unprofitable trade: %s | Conf: %.1f%% | Processor: %s",
-                                      DecisionToStringStatic(decision), confidence, processorType));
-        }
+        // The counting of totalDecisions and profitableDecisions is now done in ProcessClosedTradeProfitability()
+        // We just track processor usage here
 
         // Track processor usage
         if (processorType == "TREND")
@@ -413,25 +402,9 @@ struct DecisionMetrics
         else if (processorType == "AUTO_ROUTED")
             autoRoutedCount++;
 
-        // Update rolling average confidence
-        if (totalDecisions == 1)
-        {
-            averageConfidence = confidence;
-        }
-        else
-        {
-            averageConfidence = ((averageConfidence * prevTotal) + confidence) / totalDecisions;
-        }
-
-        // Update accuracy
-        if (totalDecisions > 0)
-        {
-            accuracyRate = ((double)profitableDecisions / totalDecisions) * 100.0;
-
-            DebugLogFile("METRICS_STATS",
-                         StringFormat("Updated stats: Trades: %d | Profitable: %d | Accuracy: %.1f%% | AvgConf: %.1f%%",
-                                      totalDecisions, profitableDecisions, accuracyRate, averageConfidence));
-        }
+        DebugLogFile("METRICS_PROCESSOR_ONLY",
+                     StringFormat("Updated processor stats: Trend: %d | Range: %d | Auto: %d",
+                                  trendProcessorCount, rangeProcessorCount, autoRoutedCount));
     }
 
     // ✅ CORRECTED - KEEP THIS ONE (REMOVE THE OTHER ONE)
@@ -733,8 +706,8 @@ public:
         DecisionParams params;
 
         // OVERRIDE with mk$ specific settings
-        params.buyConfidenceThreshold = 60.0;  // mk$ needs higher confidence
-        params.sellConfidenceThreshold = 60.0; // Even higher for sells
+        params.buyConfidenceThreshold = 70.0;  // mk$ needs higher confidence
+        params.sellConfidenceThreshold = 70.0; // Even higher for sells
         params.closePositionThreshold = 40.0;
         params.closeAllThreshold = 40.0;
         params.cooldownMinutes = positionCooldownMinutes;
@@ -743,11 +716,11 @@ public:
         params.minRiskRewardRatio = 1.0;
 
         // Regime-specific thresholds for mk$
-        params.rangeBuyThreshold = 60.0; // Higher for range trading
-        params.rangeSellThreshold = 60.0;
-        params.trendBuyThreshold = 60.0; // Lower for trend following
-        params.trendSellThreshold = 60.0;
-        params.trapProbabilityThreshold = 60.0; // mk$ avoids traps
+        params.rangeBuyThreshold = 75.0; // Higher for range trading
+        params.rangeSellThreshold = 80.0;
+        params.trendBuyThreshold = 70.0; // Lower for trend following
+        params.trendSellThreshold = 70.0;
+        params.trapProbabilityThreshold = 75.0; // mk$ avoids traps
 
         DebugLogFile("MK_PARAMS_CREATED",
                      StringFormat("Created mk$ params: Risk=%.1f%%, Cooldown=%dm",
@@ -781,7 +754,7 @@ public:
 
     bool RegisterSymbolWithDefaults(string symbol,
                                     double buyThreshold = 60.0,
-                                    double sellThreshold = 60.0,
+                                    double sellThreshold = 75.0,
                                     double riskPercent = 5.0)
     {
         DebugLogFile("REGISTER_SYMBOL_DEFAULTS", StringFormat("Registering %s with defaults: Buy=%.1f%%, Sell=%.1f%%, Risk=%.1f%%",
@@ -1009,7 +982,9 @@ public:
                                                    GetPositionSizeString(regimeAnalysis.positionSize)));
 
         // ============ STEP 6: UPDATE METRICS WITH REGIME INFO ============
-        m_metrics.Update(decision, package.overallConfidence, false, processorType);
+        DebugLogFile("DECISION_MADE_ONLY",
+                     StringFormat("Decision made for %s: %s | Conf: %.1f%% | Processor: %s | Waiting for close...",
+                                  symbol, DecisionToString(decision), package.overallConfidence, processorType));
 
         // ============ STEP 7: LOG FINAL RESULTS WITH REGIME INFO ============
         DebugLogFile("FINAL_RESULTS", "--- PROCESSING RESULTS WITH MARKET REGIME ---");
@@ -1759,7 +1734,7 @@ public:
     }
 
     // Configure market regime detector settings
-    void SetMarketRegimeSettings(int lookbackBars = 24,
+    void SetMarketRegimeSettings(int lookbackBars = 8,
                                  double accountBalance = 10000,
                                  double riskPercent = 1.0)
     {
@@ -1861,18 +1836,79 @@ private:
                      StringFormat("Processing closed trade for %s (Magic: %d) opened at %s",
                                   symbol, magic, TimeToString(m_symbolStates[symbolIndex].positionOpenTime)));
 
-        // Look for the CLOSED trade in history (not active positions)
+        // Look for the CLOSED trade in history
         bool wasProfitable = CheckClosedTradeInHistory(symbol, magic, m_symbolStates[symbolIndex].positionOpenTime);
 
         // Get processor type
         string processorType = m_symbolStates[symbolIndex].lastProcessorUsed;
 
-        // Update metrics with the OPEN decision
-        m_metrics.Update(
-            m_symbolStates[symbolIndex].positionOpenDecision,
-            m_symbolStates[symbolIndex].positionOpenConfidence,
-            wasProfitable,
-            processorType);
+        // ⚠️ CRITICAL: UPDATE METRICS WITH ACTUAL RESULT!
+        DebugLogFile("METRICS_UPDATE_START",
+                     StringFormat("Updating metrics for %s: wasProfitable=%s | OpenDecision: %s | Conf: %.1f%%",
+                                  symbol, wasProfitable ? "true" : "false",
+                                  DecisionToString(m_symbolStates[symbolIndex].positionOpenDecision),
+                                  m_symbolStates[symbolIndex].positionOpenConfidence));
+
+        // Only count if it was an OPEN decision
+        if (m_symbolStates[symbolIndex].positionOpenDecision == ACTION_OPEN_BUY ||
+            m_symbolStates[symbolIndex].positionOpenDecision == ACTION_OPEN_SELL)
+        {
+            // Update total decisions
+            int prevTotal = m_metrics.totalDecisions;
+            m_metrics.totalDecisions++;
+
+            // Update profitable decisions if it was profitable
+            if (wasProfitable)
+            {
+                m_metrics.profitableDecisions++;
+                DebugLogFile("METRICS_PROFITABLE_ADD",
+                             StringFormat("✅ Added profitable trade: %s | Total profitable now: %d",
+                                          symbol, m_metrics.profitableDecisions));
+            }
+            else
+            {
+                DebugLogFile("METRICS_UNPROFITABLE_ADD",
+                             StringFormat("❌ Added unprofitable trade: %s | Profitable total still: %d",
+                                          symbol, m_metrics.profitableDecisions));
+            }
+
+            // Update rolling average confidence
+            if (m_metrics.totalDecisions == 1)
+            {
+                m_metrics.averageConfidence = m_symbolStates[symbolIndex].positionOpenConfidence;
+            }
+            else
+            {
+                m_metrics.averageConfidence = ((m_metrics.averageConfidence * prevTotal) +
+                                               m_symbolStates[symbolIndex].positionOpenConfidence) /
+                                              m_metrics.totalDecisions;
+            }
+
+            // Update accuracy rate
+            if (m_metrics.totalDecisions > 0)
+            {
+                m_metrics.accuracyRate = ((double)m_metrics.profitableDecisions / m_metrics.totalDecisions) * 100.0;
+
+                DebugLogFile("METRICS_UPDATED",
+                             StringFormat("Metrics updated: Trades: %d | Profitable: %d | Accuracy: %.1f%% | AvgConf: %.1f%%",
+                                          m_metrics.totalDecisions,
+                                          m_metrics.profitableDecisions,
+                                          m_metrics.accuracyRate,
+                                          m_metrics.averageConfidence));
+            }
+        }
+        else
+        {
+            DebugLogFile("METRICS_SKIP",
+                         StringFormat("Skipping non-open decision in metrics: %s",
+                                      DecisionToString(m_symbolStates[symbolIndex].positionOpenDecision)));
+        }
+
+        // Track processor usage (call Update with wasProfitable flag)
+        m_metrics.Update(m_symbolStates[symbolIndex].positionOpenDecision,
+                         m_symbolStates[symbolIndex].positionOpenConfidence,
+                         wasProfitable,
+                         processorType);
 
         DebugLogFile("CLOSED_TRADE_PROCESSED",
                      StringFormat("%s | Open: %s | Final Result: %s | Processor: %s",
@@ -2161,13 +2197,13 @@ private:
             // Adjust thresholds for trend following
             if (regime.direction == "Bullish")
             {
-                params.buyConfidenceThreshold = MathMax(55.0, baseParams.trendBuyThreshold - 5.0);
-                params.sellConfidenceThreshold = MathMax(60.0, baseParams.trendSellThreshold + 5.0);
+                params.buyConfidenceThreshold = MathMax(55.0, baseParams.trendBuyThreshold - 1.0);
+                params.sellConfidenceThreshold = MathMax(70.0, baseParams.trendSellThreshold + 5.0);
             }
             else if (regime.direction == "Bearish")
             {
                 params.buyConfidenceThreshold = MathMax(60.0, baseParams.trendBuyThreshold + 5.0);
-                params.sellConfidenceThreshold = MathMax(55.0, baseParams.trendSellThreshold - 5.0);
+                params.sellConfidenceThreshold = MathMax(55.0, baseParams.trendSellThreshold - 1.0);
             }
 
             // Risk management for trends
@@ -3746,6 +3782,7 @@ private:
                     m_symbolStates[symbolIndex].positionOpenTime = TimeCurrent();
                     m_symbolStates[symbolIndex].positionOpenDecision = decision;
                     m_symbolStates[symbolIndex].positionOpenConfidence = package.overallConfidence;
+                    m_symbolStates[symbolIndex].awaitingProfitabilityCheck = false;
 
                     // DON'T update metrics here! Wait for close.
 
