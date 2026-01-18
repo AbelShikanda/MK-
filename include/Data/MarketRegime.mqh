@@ -34,6 +34,10 @@ private:
    IndicatorManager *m_indicatorManager;
    bool m_useIndicatorManager;
 
+   int m_rangeLookbackBars;       // How many bars to look back for the range
+   int m_barsSinceLastRangeInit;  // Bars since last range initialization
+   datetime m_lastRangeCheckTime; // Last time we checked for reinitialization
+
 public:
    MarketRegimeDetector(string symbol = NULL,
                         ENUM_TIMEFRAMES tf = PERIOD_H1,
@@ -48,6 +52,10 @@ public:
       m_accountBalance = accountBalance;
       m_accountRiskPercent = riskPercent;
       m_useIndicatorManager = useIndicatorManager;
+
+      m_rangeLookbackBars = 8; // Default: reinitialize every 8 bars
+      m_barsSinceLastRangeInit = 0;
+      m_lastRangeCheckTime = 0;
 
       // Initialize indicator manager if requested
       if (m_useIndicatorManager)
@@ -84,7 +92,10 @@ public:
    {
       MarketAnalysis analysis;
 
-      // 1. Initialize fixed range (5-bar lookback)
+      // 1. Check if we should reinitialize the range
+      CheckAndReinitializeRange();
+
+      // 2. Initialize fixed range if not active (fallback)
       if (!m_rangeActive)
       {
          InitializeFixedRange();
@@ -107,10 +118,76 @@ public:
       return analysis;
    }
 
-   //+------------------------------------------------------------------+
-   //| FIXED RANGE MANAGEMENT                                          |
-   //+------------------------------------------------------------------+
 private:
+   void ReinitializeRange()
+   {
+      Print("Reinitializing fixed range...");
+      InitializeFixedRange();
+      m_barsSinceLastRangeInit = 0;
+   }
+
+   //+------------------------------------------------------------------+
+   //| SMART RANGE REINITIALIZATION                                    |
+   //+------------------------------------------------------------------+
+   bool ShouldSmartReinitialize()
+   {
+      // Get current market state
+      ENUM_MARKET_STATE state = DetectCurrentState();
+      double confidence = CalculateConfidence(state);
+
+      // Condition 1: Clear ranging state with high confidence
+      bool isClearRanging = (state == STATE_RANGING_LOW_VOL || state == STATE_RANGING_HIGH_VOL) &&
+                            confidence > 50;
+
+      // Condition 2: Range is too old (more than X bars)
+      bool rangeIsOld = m_barsSinceLastRangeInit >= m_rangeLookbackBars;
+
+      // Condition 3: Price has moved significantly outside the range
+      bool priceOutOfRange = false;
+      if (m_rangeActive)
+      {
+         double currentPrice = iClose(m_symbol, m_timeframe, 0);
+         double rangeWidth = m_fixedRangeTop - m_fixedRangeBottom;
+         double atr = GetATR(14);
+
+         if (currentPrice > m_fixedRangeTop + (rangeWidth * 0.3) ||
+             currentPrice < m_fixedRangeBottom - (rangeWidth * 0.3))
+         {
+            priceOutOfRange = true;
+         }
+      }
+
+      // Decision matrix
+      if (rangeIsOld)
+      {
+         if (isClearRanging || priceOutOfRange)
+            return true;
+
+         // Reinitialize if market is in contraction/expansion phase
+         if (state == STATE_CONTRACTION || state == STATE_EXPANSION)
+            return true;
+      }
+
+      return false;
+   }
+
+   void CheckAndReinitializeRange()
+   {
+      datetime currentTime = iTime(m_symbol, m_timeframe, 0);
+
+      if (m_lastRangeCheckTime == currentTime)
+         return;
+
+      m_lastRangeCheckTime = currentTime;
+      m_barsSinceLastRangeInit++;
+
+      // Use smart reinitialization logic
+      if (ShouldSmartReinitialize())
+      {
+         ReinitializeRange();
+      }
+   }
+
    double GetMAValue(int period, int shift = 0)
    {
       if (m_useIndicatorManager && m_indicatorManager != NULL && m_indicatorManager.IsInitialized())
@@ -168,8 +245,8 @@ private:
          double ma9, ma21, ma50, ma89;
          if (m_indicatorManager.GetMAValuesForRange(m_timeframe, ma9, ma21, ma50, ma89, 0))
          {
-            double ma50_5 = GetMAValue(50, 5);
-            double ma89_5 = GetMAValue(89, 5);
+            double ma50_8 = GetMAValue(50, 8);
+            double ma89_8 = GetMAValue(89, 8);
 
             if (ma50 <= 0 || ma89 <= 0)
                return false;
@@ -178,10 +255,10 @@ private:
             double separation = MathAbs(ma50 - ma89) / ((ma50 + ma89) / 2) * 100;
 
             // Check alignment and slope
-            bool maAlignedBullish = (ma50 > ma89) && (ma50_5 > ma89_5);
-            bool maAlignedBearish = (ma50 < ma89) && (ma50_5 < ma89_5);
-            bool maSlopeBullish = (ma50 > ma50_5);
-            bool maSlopeBearish = (ma50 < ma50_5);
+            bool maAlignedBullish = (ma50 > ma89) && (ma50_8 > ma89_8);
+            bool maAlignedBearish = (ma50 < ma89) && (ma50_8 < ma89_8);
+            bool maSlopeBullish = (ma50 > ma50_8);
+            bool maSlopeBearish = (ma50 < ma50_8);
 
             // Significant separation with same slope = strong trend
             if (separation > 0.5) // 0.5% separation threshold
@@ -256,7 +333,7 @@ private:
       double adx = GetADX(14);
       double atr = GetATR(14);
       double bbWidth = GetBollingerWidth(20, 2);
-      double priceChange = GetPriceChange(5);
+      double priceChange = GetPriceChange(8);
       double rangeTouches = CountRangeTouches();
 
       // ========== FIXED: MA SEPARATION as CONFIDENCE BOOST, not VETO ==========
@@ -278,9 +355,9 @@ private:
          trendBias = MathMin(1.0, (maDistancePercent - 0.5) / 1.0); // Scales 0.5-1.5% to 0-1.0
 
          // Get MA slope (5 bars ago vs now)
-         double ma50_5 = GetMAValue(50, 5);
-         bool maSlopeUp = (ma50 > ma50_5);
-         bool maSlopeDown = (ma50 < ma50_5);
+         double ma50_8 = GetMAValue(50, 8);
+         bool maSlopeUp = (ma50 > ma50_8);
+         bool maSlopeDown = (ma50 < ma50_8);
 
          // If MAs are diverging (getting further apart), stronger trend bias
          if ((maDistancePercent > 0.75) && (maSlopeUp || maSlopeDown))
@@ -349,7 +426,7 @@ private:
       if (isTrendingStructure)
       {
          // RESTORE ADX THRESHOLD to 25 (from 20)
-         if (adx >= 25) // Changed BACK to 25 from 20
+         if (adx >= 20) // Changed BACK to 25 from 20
          {
             // Apply trend bias if MAs are separated
             double trendStrength = adx / 100.0; // Normalize ADX 0-1
@@ -379,7 +456,7 @@ private:
          double rangeStrength = (m_rangeActive ? 0.7 : 0.3) + (rangeTouches * 0.05);
          double finalRangeScore = rangeStrength + (rangeBias * 0.3) - (trendBias * 0.3);
 
-         if (finalRangeScore > 0.4) // Need reasonable range strength
+         if (finalRangeScore > 0.5) // Need reasonable range strength
          {
             if (volatilityHigh)
                return STATE_RANGING_HIGH_VOL;
@@ -449,7 +526,7 @@ private:
             double scoreDifference = trendScore - rangeScore;
 
             // Trend needs to be SIGNIFICANTLY stronger (>0.15) to win
-            if (scoreDifference > 0.15) // Changed from 0.2 to 0.15
+            if (scoreDifference > 0.10) // Changed from 0.2 to 0.15
             {
                if (volatilityLow || volatilityScore < 0.5)
                   return STATE_TRENDING_LOW_VOL;
@@ -697,9 +774,9 @@ private:
       // ========== NEW: ADD MOVING AVERAGE CONFIRMATION ==========
       // Get MA values using IndicatorManager or direct
       double ma50 = GetMAValue(50, 0);
-      double ma50_5 = GetMAValue(50, 5);
+      double ma50_8 = GetMAValue(50, 8);
       double ma89 = GetMAValue(89, 0);
-      double ma89_5 = GetMAValue(89, 5);
+      double ma89_8 = GetMAValue(89, 8);
       double ma200 = GetMAValue(200, 0);
 
       // Check if we got valid values
@@ -718,8 +795,8 @@ private:
       }
 
       // Check MA alignment
-      bool maAlignedBullish = (ma50 > ma89) && (ma50_5 > ma89_5);
-      bool maAlignedBearish = (ma50 < ma89) && (ma50_5 < ma89_5);
+      bool maAlignedBullish = (ma50 > ma89) && (ma50_8 > ma89_8);
+      bool maAlignedBearish = (ma50 < ma89) && (ma50_8 < ma89_8);
 
       // ========== ENHANCED PRICE STRUCTURE (more forgiving) ==========
       // Look at 8 bars instead of 5
@@ -761,18 +838,18 @@ private:
 
       // CRITICAL: If MAs are significantly separated (>0.75%), GENTLE trend bias
       // Changed from 0.5% to 0.75% for more selective bias
-      if (maDistancePercent > 0.75) // 0.75% separation between 50 and 89 MA
+      if (maDistancePercent > 0.5) // 0.75% separation between 50 and 89 MA
       {
          // Strong MA separation = trend gets MODERATE priority
          // Changed from 0.4 to 0.5 threshold - need clearer trend structure
-         if (maAlignedBullish && uptrendRatio > 0.5)
+         if (maAlignedBullish && uptrendRatio > 0.4)
             return true; // Need 50% confirmation (was 40%)
-         if (maAlignedBearish && downtrendRatio > 0.5)
+         if (maAlignedBearish && downtrendRatio > 0.4)
             return true;
       }
 
       // Original logic - keep as primary
-      if (uptrendRatio > 0.7 || downtrendRatio > 0.7) // 70% threshold
+      if (uptrendRatio > 0.6 || downtrendRatio > 0.6) // 70% threshold
       {
          return true;
       }
@@ -782,7 +859,7 @@ private:
 
       // Price far from 200 MA suggests trend
       double distanceFromMA = MathAbs(currentPrice - ma200) / ma200 * 100;
-      if (distanceFromMA > 1.5) // Changed from 1.0% to 1.5% - more conservative
+      if (distanceFromMA > 1.0) // Changed from 1.0% to 1.5% - more conservative
       {
          return true; // Force trend classification
       }
@@ -1106,6 +1183,26 @@ private:
 
 public:
    //+------------------------------------------------------------------+
+   //| MANUAL RANGE REINITIALIZATION                                   |
+   //+------------------------------------------------------------------+
+   void ResetRange()
+   {
+      ReinitializeRange();
+   }
+
+   //+------------------------------------------------------------------+
+   //| GET/SET RANGE CONFIGURATION                                     |
+   //+------------------------------------------------------------------+
+   int GetBarsSinceLastRangeInit() const { return m_barsSinceLastRangeInit; }
+   int GetRangeLookbackBars() const { return m_rangeLookbackBars; }
+
+   void SetRangeLookbackBars(int bars)
+   {
+      m_rangeLookbackBars = bars;
+      Print("Range lookback bars set to: " + IntegerToString(bars));
+   }
+
+   //+------------------------------------------------------------------+
    //| GETTER METHODS                                                  |
    //+------------------------------------------------------------------+
    double GetRangeTop() const { return m_fixedRangeTop; }
@@ -1214,40 +1311,6 @@ void DrawText(long chartId, string name, datetime time, double price,
 }
 
 //+------------------------------------------------------------------+
-//| GLOBAL HELPER FUNCTION                                           |
-//+------------------------------------------------------------------+
-MarketAnalysis GetCurrentMarketRegime(string symbol = NULL,
-                                      ENUM_TIMEFRAMES tf = PERIOD_H1,
-                                      bool drawOnChart = true,
-                                      bool useIndicatorManager = true)
-{
-   static MarketRegimeDetector *detector = NULL;
-
-   if (detector == NULL)
-   {
-      detector = new MarketRegimeDetector(symbol, tf, 10000, 1.0, useIndicatorManager);
-   }
-
-   MarketAnalysis analysis = detector.GetMarketRegime();
-
-   if (drawOnChart)
-   {
-      DrawMarketRegime(analysis, symbol, tf);
-   }
-
-   return analysis;
-}
-
-//+------------------------------------------------------------------+
-//| QUICK TEST FUNCTION                                              |
-//+------------------------------------------------------------------+
-void TestMarketRegime()
-{
-   MarketAnalysis analysis = GetCurrentMarketRegime();
-   Print(analysis.ToString());
-}
-
-//+------------------------------------------------------------------+
 //| ENHANCED CHART DISPLAY FUNCTIONS                                |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
@@ -1313,31 +1376,6 @@ void DisplayMarketRegimeOnChart(MarketAnalysis &analysis,
          // Draw ONLY the range lines (no text, no labels)
          DrawHorizontalLine(chartId, prefix + "RangeTop", top, clrDodgerBlue, STYLE_DASH, 2);
          DrawHorizontalLine(chartId, prefix + "RangeBottom", bottom, clrDodgerBlue, STYLE_DASH, 2);
-
-         // ==================== OPTIONAL: Minimal text (comment out if not wanted) ====================
-         // Uncomment ONE of these options if you want minimal labels:
-
-         // Option A: Just the price values
-         // DrawTextOnChart(chartId, prefix + "RangeTopLabel",
-         //                 TimeCurrent() - PeriodSeconds(tf) * 30, top,
-         //                 StringFormat("%.5f", top),
-         //                 clrDodgerBlue, 8, "Arial", ANCHOR_LEFT_UPPER);
-         //
-         // DrawTextOnChart(chartId, prefix + "RangeBottomLabel",
-         //                 TimeCurrent() - PeriodSeconds(tf) * 30, bottom,
-         //                 StringFormat("%.5f", bottom),
-         //                 clrDodgerBlue, 8, "Arial", ANCHOR_LEFT_UPPER);
-
-         // Option B: Simple "R" markers
-         // DrawTextOnChart(chartId, prefix + "RangeTopMarker",
-         //                 TimeCurrent() - PeriodSeconds(tf) * 30, top,
-         //                 "R",
-         //                 clrDodgerBlue, 8, "Wingdings", ANCHOR_LEFT_UPPER);
-         //
-         // DrawTextOnChart(chartId, prefix + "RangeBottomMarker",
-         //                 TimeCurrent() - PeriodSeconds(tf) * 30, bottom,
-         //                 "R",
-         //                 clrDodgerBlue, 8, "Wingdings", ANCHOR_LEFT_UPPER);
       }
    }
 
@@ -1560,26 +1598,5 @@ MarketAnalysis GetMarketRegimeWithDisplay(string symbol = NULL,
    }
 
    return analysis;
-}
-
-//+------------------------------------------------------------------+
-//| TEST FUNCTIONS                                                   |
-//+------------------------------------------------------------------+
-void TestMarketRegimeDisplay()
-{
-   // Get analysis with visual display
-   MarketAnalysis analysis = GetMarketRegimeWithDisplay(NULL, PERIOD_H1, true, CORNER_RIGHT_UPPER, true);
-
-   // Also print to journal
-   Print("=== MARKET REGIME ANALYSIS ===");
-   Print(analysis.ToString());
-   Print("==============================");
-}
-
-void CleanupMarketRegime()
-{
-   EventKillTimer();
-   RemoveAllRegimeDrawings(ChartID(), "MarketRegime_");
-   Print("Market Regime Display cleaned up");
 }
 //+------------------------------------------------------------------+

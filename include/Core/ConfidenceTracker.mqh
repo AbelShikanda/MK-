@@ -4,7 +4,7 @@
 //|                                       https://www.yourwebsite.com|
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2023"
-#property link      "https://www.yourwebsite.com"
+// #property link      "https://www.yourwebsite.com"
 #property strict
 
 #include <MathUtils.mqh>

@@ -4,7 +4,7 @@
 //|                                       https://www.yourwebsite.com |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024"
-#property link      "https://www.yourwebsite.com"
+// #property link      "https://www.yourwebsite.com"
 #property version   "1.00"
 
 #include <Trade/Trade.mqh>

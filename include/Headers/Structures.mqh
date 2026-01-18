@@ -225,17 +225,17 @@ struct DecisionEngineInterface
 
         if (IsRangePackage())
         {
-            if (trapProbability > 60)
+            if (trapProbability > 75)
                 return 0.5;
-            if (entryQualityScore > 70)
+            if (entryQualityScore > 60)
                 return 1.0;
             return 0.75;
         }
         else if (IsTrendPackage())
         {
-            if (overallConfidence > 80)
+            if (overallConfidence > 70)
                 return 1.2;
-            if (overallConfidence > 60)
+            if (overallConfidence > 70)
                 return 1.0;
             return 0.8;
         }
@@ -248,7 +248,7 @@ struct DecisionEngineInterface
     {
         if (IsRangePackage())
         {
-            if (trapProbability > 70)
+            if (trapProbability > 75)
                 return 2.0; // Wider stops for high trap zones
             if (rangeAction == "FADE_EDGE")
                 return 1.5; // Wider for fade trades

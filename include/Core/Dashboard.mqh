@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
-//|                     ENHANCED DASHBOARD v2.0                     |
-//|                    Compact Professional Display                 |
+//|                     ENHANCED DASHBOARD v3.0                     |
+//|                    Complete Component Display                   |
 //+------------------------------------------------------------------+
 
-#ifndef DASHBOARD_MQH_V2
-#define DASHBOARD_MQH_V2
+#ifndef DASHBOARD_MQH_V3
+#define DASHBOARD_MQH_V3
 
 #include <Trade\PositionInfo.mqh>
 
@@ -28,7 +28,7 @@ input color PositiveColor = clrLime;
 input color NegativeColor = clrOrangeRed;
 
 // ==================== DASHBOARD MANAGER CLASS ====================
-class CompactDashboard
+class EnhancedDashboard
 {
 private:
     string m_symbol;
@@ -43,13 +43,13 @@ private:
 
 public:
     // Constructor
-    CompactDashboard() : m_symbol(""),
-                         m_magicNumber(0),
-                         m_packageManager(NULL),
-                         m_decisionEngine(NULL),
-                         m_regimeDetector(NULL),
-                         m_lastDisplay(""),
-                         m_lastUpdateTime(0)
+    EnhancedDashboard() : m_symbol(""),
+                          m_magicNumber(0),
+                          m_packageManager(NULL),
+                          m_decisionEngine(NULL),
+                          m_regimeDetector(NULL),
+                          m_lastDisplay(""),
+                          m_lastUpdateTime(0)
     {
     }
 
@@ -60,7 +60,7 @@ public:
     {
         if (symbol == "" || pkgManager == NULL || decisionEng == NULL)
         {
-            Print("ERROR: CompactDashboard - Invalid initialization parameters");
+            Print("ERROR: EnhancedDashboard - Invalid initialization parameters");
             return false;
         }
 
@@ -79,7 +79,7 @@ public:
             Print("Market Regime Detector initialized");
         }
 
-        Print("CompactDashboard initialized for " + symbol);
+        Print("EnhancedDashboard initialized for " + symbol);
         return true;
     }
 
@@ -102,7 +102,7 @@ public:
 
         m_lastUpdateTime = TimeCurrent();
 
-        string display = GenerateCompactDashboard();
+        string display = GenerateEnhancedDashboard();
 
         if (forceUpdate || display != m_lastDisplay)
         {
@@ -111,8 +111,8 @@ public:
         }
     }
 
-    // Generate compact dashboard
-    string GenerateCompactDashboard()
+    // Generate enhanced dashboard
+    string GenerateEnhancedDashboard()
     {
         string display = "";
 
@@ -142,13 +142,34 @@ public:
 
         display += SeparatorLine();
 
-        // ==================== TRADING INFO ====================
-        display += GenerateTradingInfoSection();
+        // ==================== PACKAGE INFO ====================
+        display += GeneratePackageInfoSection();
+
+        // Add debug info if there's a mismatch
+        if (m_decisionEngine != NULL)
+        {
+            DecisionEngineInterface lastPackage = m_decisionEngine.GetLastPackage(m_symbol);
+            string actualProcessor = m_decisionEngine.GetLastProcessorUsed(m_symbol);
+
+            // Check for mismatch between package type and processor
+            bool isRangePackage = lastPackage.IsRangePackage();
+            bool usingRangeProcessor = (actualProcessor == "RANGE");
+
+            if (isRangePackage != usingRangeProcessor)
+            {
+                display += UnderLining();
+                display += "| WARNING: Package/Processor Mismatch!\n";
+                display += StringFormat("| Package says: %s | Processor says: %s\n",
+                                        isRangePackage ? "RANGE" : "TREND",
+                                        actualProcessor);
+                display += UnderLining();
+            }
+        }
 
         display += SeparatorLine();
 
-        // ==================== CONDITIONAL DISPLAY ====================
-        display += GenerateConditionalSection();
+        // ==================== COMPONENT BREAKDOWN ====================
+        display += GenerateComponentBreakdown();
 
         display += SeparatorLine();
 
@@ -213,7 +234,7 @@ private:
         return section;
     }
 
-    string GenerateTradingInfoSection()
+    string GeneratePackageInfoSection()
     {
         string section = "";
 
@@ -221,71 +242,251 @@ private:
         {
             DecisionEngineInterface lastPackage = m_decisionEngine.GetLastPackage(m_symbol);
 
+            // Get ACTUAL processor used (not just guessing from package type)
+            string actualProcessor = m_decisionEngine.GetLastProcessorUsed(m_symbol);
+
             if (lastPackage.IsValid())
             {
-                string packageType = lastPackage.IsRangePackage() ? "Range Package" : "Trend Package";
-                string direction = ConvertDirection(lastPackage.dominantDirection);
+                // FIX 1: Use the ACTUAL package type from the processor used
+                string packageType = (actualProcessor == "RANGE") ? "Range Package" : (actualProcessor == "TREND") ? "Trend Package"
+                                                                                                                   : "Unknown Package";
 
-                section += StringFormat("| Package      : %s | %s | Conf: %.0f%%\n",
-                                        packageType, direction, lastPackage.overallConfidence);
+                // FIX 2: Get direction and confidence from the actual package
+                string direction = ConvertDirection(lastPackage.dominantDirection);
+                string action = GetCompactAction(lastPackage.recommendedAction, lastPackage.dominantDirection);
+
+                // FIX 3: Add processor info to the display
+                section += StringFormat("| Package      : %s | %s | Act:%s | Conf: %.0f%%\n",
+                                        packageType, direction, action,
+                                        lastPackage.overallConfidence);
+
+                // Show trap info if available
+                if (lastPackage.trapProbability > 0)
+                {
+                    section += SeparatorLine();
+                    section += StringFormat("| Trap         : %.0f%% | Trap Zone: %s\n",
+                                            lastPackage.trapProbability,
+                                            lastPackage.isTrapZone ? "YES" : "NO");
+                }
             }
             else
             {
-                section += "| Package       : NONE | NONE | Conf: 0%\n";
+                section += "| Package      : NO_VALID_PACKAGE | Proc: NONE | Conf: 0%\n";
             }
+        }
+        else
+        {
+            section += "| Package      : NO_DECISION_ENGINE\n";
         }
 
         return section;
     }
 
-    string GenerateConditionalSection()
+    // Update GenerateComponentBreakdown to match actual processor
+    string GenerateComponentBreakdown()
     {
         string section = "";
 
-        if (m_regimeDetector == NULL || m_decisionEngine == NULL)
-            return section;
+        if (m_decisionEngine == NULL)
+            return "| Components    : NO DATA\n";
 
-        MarketAnalysis regime = m_regimeDetector.GetMarketRegime();
         DecisionEngineInterface lastPackage = m_decisionEngine.GetLastPackage(m_symbol);
+        string actualProcessor = m_decisionEngine.GetLastProcessorUsed(m_symbol);
 
-        if (regime.IsTrending())
+        if (!lastPackage.IsValid())
+            return "| Components    : NO VALID PACKAGE\n";
+
+        section += "| Components    : ";
+
+        // Use the ACTUAL processor, not guessing from package type
+        if (actualProcessor == "RANGE")
         {
-            // Display trend components
-            section += "| Trend Info        : ";
-            if (lastPackage.IsValid())
-            {
-                // Simple component display - in real implementation, you would extract these from modules
-                section += "| MTF/" + GetDirectionSymbol(lastPackage.dominantDirection) + "/80% ";
-                section += "| POI/" + GetDirectionSymbol(lastPackage.dominantDirection) + "/75% ";
-                section += "| RSI/" + GetDirectionSymbol(lastPackage.dominantDirection) + "/70%";
-            }
-            section += "\n";
+            section += GetDetailedRangeComponents(lastPackage);
         }
-        else if (regime.IsRanging())
+        else if (actualProcessor == "TREND")
         {
-            // Display range info
-            if (m_regimeDetector.IsRangeActive())
-            {
-                double top = m_regimeDetector.GetRangeTop();
-                double bottom = m_regimeDetector.GetRangeBottom();
-                double currentPrice = SymbolInfoDouble(m_symbol, SYMBOL_BID);
-
-                if (top > bottom)
-                {
-                    double positionPercent = ((currentPrice - bottom) / (top - bottom)) * 100;
-                    section += StringFormat("| Range Info       : %.2f-%.2f | Pos: %.0f%%\n",
-                                            bottom, top, positionPercent);
-                }
-            }
-
-            
-            section += "-----------------------------------------------------------------------------------------------------------------\n";
-
-            // Display range components
-            section += "| Comp: COMP1/B/40% COMP2/B/40% COMP3/B/40%\n";
+            section += GetDetailedTrendComponents(lastPackage);
         }
+        else
+        {
+            // If we don't know the processor, check the package type
+            if (lastPackage.IsRangePackage())
+            {
+                section += GetDetailedRangeComponents(lastPackage);
+            }
+            else
+            {
+                section += GetDetailedTrendComponents(lastPackage);
+            }
+        }
+
+        section += "\n";
 
         return section;
+    }
+
+    string GetDetailedTrendComponents(const DecisionEngineInterface &package)
+    {
+        string components = "";
+
+        // Check if we have access to PackageManager for detailed components
+        if (m_packageManager != NULL)
+        {
+            TrendPackage trendPackage = m_packageManager.GetTrendPackage(false);
+
+            if (trendPackage.isValid)
+            {
+                // Build component display with all 6 components
+                components += "Trend Components\n";
+
+                // components += UnderLining();
+
+                // MTF Component
+                if (trendPackage.scores.mtfScore > 0)
+                {
+                    components += UnderLining();
+                    string mtfDir = trendPackage.GetMTFDirection();
+                    components += StringFormat("    | MTF/%s/%.0f%%\n",
+                                               GetShortDirection(mtfDir),
+                                               trendPackage.scores.mtfScore);
+                }
+
+                // POI Component
+                if (trendPackage.scores.poiScore > 0)
+                {
+                    components += UnderLining();
+                    components += StringFormat("    | POI/%s/%.0f%%\n",
+                                               GetShortDirection(trendPackage.poiSignal.overallBias),
+                                               trendPackage.scores.poiScore);
+                }
+
+                // Volume Component
+                if (trendPackage.scores.volumeScore > 0)
+                {
+                    components += UnderLining();
+                    components += StringFormat("    | VOL/%s/%.0f%%\n",
+                                               GetShortDirection(trendPackage.volumeData.bias),
+                                               trendPackage.scores.volumeScore);
+                }
+
+                // RSI Component
+                if (trendPackage.scores.rsiScore > 0)
+                {
+                    components += UnderLining();
+                    components += StringFormat("    | RSI/%s/%.0f%%\n",
+                                               GetShortDirection(trendPackage.rsiData.biasText),
+                                               trendPackage.scores.rsiScore);
+                }
+
+                // MACD Component
+                if (trendPackage.scores.macdScore > 0)
+                {
+                    components += UnderLining();
+                    components += StringFormat("    | MACD/%s/%.0f%%\n",
+                                               GetShortDirection(trendPackage.macdData.bias),
+                                               trendPackage.scores.macdScore);
+                }
+
+                // Pattern Component
+                if (trendPackage.scores.patternScore > 0)
+                {
+                    components += UnderLining();
+                    components += StringFormat("    | PAT/%s/%.0f%%",
+                                               GetShortDirection(trendPackage.patternData.direction),
+                                               trendPackage.scores.patternScore);
+                }
+
+                // Remove trailing pipe if exists
+                if (StringGetCharacter(components, StringLen(components) - 1) == '|')
+                {
+                    components = StringSubstr(components, 0, StringLen(components) - 1);
+                }
+
+                components += "\n";
+
+                components += UnderLining();
+
+                // Add alignment info
+                components += StringFormat("    | B:%d/S:%d",
+                                           trendPackage.mtfData.bullishCount,
+                                           trendPackage.mtfData.bearishCount);
+            }
+            else
+            {
+                components = "NO_TREND_DATA";
+            }
+        }
+        else
+        {
+            // Fallback to basic package info
+            string dirSymbol = GetDirectionSymbol(package.dominantDirection);
+            components = StringFormat("TREND/%s/%d%%", dirSymbol, (int)package.overallConfidence);
+
+            if (package.weightedScore > 0)
+            {
+                components += StringFormat(" | SCORE/%.2f", package.weightedScore);
+            }
+        }
+
+        return components;
+    }
+
+    string GetDetailedRangeComponents(const DecisionEngineInterface &package)
+    {
+        string components = "";
+
+        // Use RangeIntelligence to get detailed component analysis
+        RangeAnalysisResult rangeResult = RangeIntelligence::AnalyzeRange(m_symbol, Period());
+
+        if (rangeResult.isValidRange)
+        {
+            components += "Range Components \n";
+
+            components += UnderLining();
+
+            // Add range boundaries
+            components += StringFormat("    | S:%.2f | R:%.2f | W:%.2f%% \n",
+                                       rangeResult.supportLevel,
+                                       rangeResult.resistanceLevel,
+                                       rangeResult.rangeWidthPercent);
+
+            components += UnderLining();
+
+            // Add trap probability
+            components += StringFormat("    | TRAP:%.0f%% | ", rangeResult.trapProbability);
+
+            // Add range bias
+            components += StringFormat("BIAS:%s | ", GetShortDirection(rangeResult.rangeBiasDirection));
+
+            // Add action
+            components += StringFormat("ACT:%s", rangeResult.rangeAction);
+
+            components += "\n";
+
+            components += UnderLining();
+
+            // Add additional component scores if available
+            if (rangeResult.scores.tightnessScore > 0)
+            {
+                components += StringFormat("    | Tightness:%.0f%%", rangeResult.scores.tightnessScore);
+            }
+
+            if (rangeResult.scores.symmetryScore > 0)
+            {
+                components += StringFormat(" | Srmmetry:%.0f%%", rangeResult.scores.symmetryScore);
+            }
+
+            if (rangeResult.scores.rejectionScore > 0)
+            {
+                components += StringFormat(" | Rejection:%.0f%%", rangeResult.scores.rejectionScore);
+            }
+        }
+        else
+        {
+            components = "NO_RANGE_DETECTED";
+        }
+
+        return components;
     }
 
     string GenerateSetupSection()
@@ -327,6 +528,8 @@ private:
                 warning = "High Volatility ";
             else if (analysis.state == STATE_CONTRACTION)
                 warning = "Small Stops ";
+            else if (analysis.state == STATE_TRENDING_HIGH_VOL)
+                warning = "Trend Exhaustion ";
 
             section += StringFormat("| Action       : %s%s\n", warning, action);
         }
@@ -342,10 +545,8 @@ private:
         {
             MarketAnalysis analysis = m_regimeDetector.GetMarketRegime();
 
-            // Truncate description to fit
-            string shortDesc = TruncateString(analysis.description, 100);
-
-            section += StringFormat("| Description  : %s\n", shortDesc);
+            // Display the complete description
+            section += StringFormat("| Description  : %s\n", analysis.description);
         }
 
         return section;
@@ -363,13 +564,13 @@ private:
 
             // Get position count
             int positionCount = GetPositionCount();
-            string positionStr = positionCount > 0 ? StringFormat("%d Positions", positionCount) : "NO_POS";
+            string positionStr = positionCount > 0 ? StringFormat("%d Pos", positionCount) : "NO_POS";
 
-            // Get position count
-            string positiondir = GetDirectionSymbol((string)lastDecision);
-            string direction = positionCount > 0 ? positiondir : "NO_DIR"; 
+            // Get position direction
+            string positionDir = positionCount > 0 ? GetCurrentPositionDirection() : "NO_DIR";
 
-            section += StringFormat("| Decision     : %s | %s | %s", decisionStr, positionStr, direction);
+            section += StringFormat("| Decision     : %s | %s | %s",
+                                    decisionStr, positionStr, positionDir);
         }
         else
         {
@@ -407,7 +608,7 @@ private:
                 accuracyStr = StringFormat("%.1f%%", accuracy);
             }
 
-            section += StringFormat(" | Trades: %d | W:%d L:%d | WinRate: %s\n",
+            section += StringFormat(" | Trades: %d | W:%d L:%d | Win: %s\n",
                                     metrics.totalDecisions,
                                     metrics.profitableDecisions,
                                     losingTrades,
@@ -434,13 +635,28 @@ private:
         return "NONE";
     }
 
+    string GetShortDirection(string direction)
+    {
+        if (direction == "BULLISH" || direction == "Bullish")
+            return "BUY";
+        if (direction == "BEARISH" || direction == "Bearish")
+            return "SELL";
+        if (direction == "NEUTRAL" || direction == "Neutral")
+            return "NON";
+        if (direction == "CONFLICTED")
+            return "CONFLICT";
+        return "?";
+    }
+
     string GetDirectionSymbol(string direction)
     {
         if (direction == "BULLISH")
             return "B";
         if (direction == "BEARISH")
             return "S";
-        return "N";
+        if (direction == "NEUTRAL")
+            return "N";
+        return "?";
     }
 
     string ConvertDecisionToDirection(DECISION_ACTION decision)
@@ -480,6 +696,8 @@ private:
             return "EXIT/WAIT";
         if (StringFind(action, "Prepare") >= 0)
             return "PREPARE" + dirShort;
+        if (StringFind(action, "Avoid") >= 0)
+            return "AVOID";
 
         return action + dirShort;
     }
@@ -501,6 +719,29 @@ private:
         default:
             return "NONE";
         }
+    }
+
+    string GetCurrentPositionDirection()
+    {
+        if (GetPositionCount() == 0)
+            return "NO_DIR";
+
+        // Get the first position's direction
+        for (int i = 0; i < PositionsTotal(); i++)
+        {
+            if (PositionGetTicket(i))
+            {
+                string posSymbol = PositionGetString(POSITION_SYMBOL);
+                long posMagic = PositionGetInteger(POSITION_MAGIC);
+                long posType = PositionGetInteger(POSITION_TYPE);
+
+                if (posSymbol == m_symbol && posMagic == m_magicNumber)
+                {
+                    return (posType == POSITION_TYPE_BUY) ? "B" : "S";
+                }
+            }
+        }
+        return "NO_DIR";
     }
 
     string GetTradingSessionShort()
@@ -609,6 +850,11 @@ private:
         return "-----------------------------------------------------------------------------------------------------------------\n";
     }
 
+    string UnderLining()
+    {
+        return "--------------------------------------------------------------------------\n";
+    }
+
     string TruncateString(string text, int maxLength)
     {
         if (StringLen(text) <= maxLength)
@@ -619,12 +865,12 @@ private:
 
 // ==================== GLOBAL FUNCTION ====================
 
-void ShowCompactDashboard(string symbol,
-                          int magicNumber,
-                          PackageManager &pkgManager,
-                          DecisionEngine &decisionEngineObj)
+void ShowEnhancedDashboard(string symbol,
+                           int magicNumber,
+                           PackageManager &pkgManager,
+                           DecisionEngine &decisionEngineObj)
 {
-    static CompactDashboard dashboard;
+    static EnhancedDashboard dashboard;
     static bool initialized = false;
 
     if (!initialized)
@@ -633,7 +879,7 @@ void ShowCompactDashboard(string symbol,
                                  GetPointer(decisionEngineObj)))
         {
             initialized = true;
-            Print("CompactDashboard initialized");
+            Print("EnhancedDashboard initialized");
         }
     }
 
@@ -643,4 +889,4 @@ void ShowCompactDashboard(string symbol,
     }
 }
 
-#endif // DASHBOARD_MQH_V2
+#endif // DASHBOARD_MQH_V3

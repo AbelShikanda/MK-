@@ -105,18 +105,18 @@ struct DecisionParams
     double trendSellThreshold;
     double trapProbabilityThreshold;
 
-    DecisionParams(double buyThresh = 70.0,
-                   double sellThresh = 70.0,
+    DecisionParams(double buyThresh = 60.0,
+                   double sellThresh = 60.0,
                    double closeThresh = 40.0,
                    double closeAllThresh = 40.0,
                    int cooldownMins = 30,
                    int maxPositions = 2,
                    double riskPct = 20.0,
                    double minRR = 1.0,
-                   double rangeBuy = 75.0,
-                   double rangeSell = 80.0,
-                   double trendBuy = 70.0,
-                   double trendSell = 70.0,
+                   double rangeBuy = 60.0,
+                   double rangeSell = 60.0,
+                   double trendBuy = 60.0,
+                   double trendSell = 60.0,
                    double trapProb = 75.0)
     {
         buyConfidenceThreshold = buyThresh;
@@ -252,6 +252,10 @@ struct SymbolState
     double positionOpenConfidence;
     bool awaitingProfitabilityCheck;
 
+    string actualProcessorUsed; // "TREND", "RANGE", etc.
+    datetime lastProcessingTime;
+    string lastProcessingReason;
+
     SymbolState()
     {
         symbol = "";
@@ -267,6 +271,10 @@ struct SymbolState
         positionOpenDecision = ACTION_NONE;
         positionOpenConfidence = 0;
         awaitingProfitabilityCheck = false;
+
+        actualProcessorUsed = "NONE";
+        lastProcessingTime = 0;
+        lastProcessingReason = "";
     }
 
     bool HasValidPackage()
@@ -520,7 +528,7 @@ public:
         // Routing defaults
         m_autoDetectProcessor = true;
         m_useMarketRegimeRouting = true;
-        m_trapThresholdForRange = 65.0;
+        m_trapThresholdForRange = 75.0;
 
         // Auto-package creation defaults
         m_autoPackageCreation = false;
@@ -706,8 +714,8 @@ public:
         DecisionParams params;
 
         // OVERRIDE with mk$ specific settings
-        params.buyConfidenceThreshold = 70.0;  // mk$ needs higher confidence
-        params.sellConfidenceThreshold = 70.0; // Even higher for sells
+        params.buyConfidenceThreshold = 60.0;  // mk$ needs higher confidence
+        params.sellConfidenceThreshold = 60.0; // Even higher for sells
         params.closePositionThreshold = 40.0;
         params.closeAllThreshold = 40.0;
         params.cooldownMinutes = positionCooldownMinutes;
@@ -716,10 +724,10 @@ public:
         params.minRiskRewardRatio = 1.0;
 
         // Regime-specific thresholds for mk$
-        params.rangeBuyThreshold = 75.0; // Higher for range trading
-        params.rangeSellThreshold = 80.0;
-        params.trendBuyThreshold = 70.0; // Lower for trend following
-        params.trendSellThreshold = 70.0;
+        params.rangeBuyThreshold = 60.0; // Higher for range trading
+        params.rangeSellThreshold = 60.0;
+        params.trendBuyThreshold = 60.0; // Lower for trend following
+        params.trendSellThreshold = 60.0;
         params.trapProbabilityThreshold = 75.0; // mk$ avoids traps
 
         DebugLogFile("MK_PARAMS_CREATED",
@@ -754,7 +762,7 @@ public:
 
     bool RegisterSymbolWithDefaults(string symbol,
                                     double buyThreshold = 60.0,
-                                    double sellThreshold = 75.0,
+                                    double sellThreshold = 60.0,
                                     double riskPercent = 5.0)
     {
         DebugLogFile("REGISTER_SYMBOL_DEFAULTS", StringFormat("Registering %s with defaults: Buy=%.1f%%, Sell=%.1f%%, Risk=%.1f%%",
@@ -839,9 +847,21 @@ public:
 
         // ============ STEP 2: INTELLIGENT ROUTING BASED ON MARKET REGIME ============
         DebugLogFile("ROUTING_START", "--- INTELLIGENT PROCESSOR ROUTING ---");
+
+        int symbolIndex = FindSymbolIndex(symbol);
+        if (symbolIndex < 0)
+        {
+            DebugLogFile("ERROR", "Symbol index not found: " + symbol);
+            // return ACTION_NONE;
+        }
         DECISION_ACTION decision = ACTION_NONE;
         string processorType = "UNKNOWN";
         string routingReason = "";
+
+        // In the routing section, store the processor info:
+        m_symbolStates[symbolIndex].actualProcessorUsed = processorType;
+        m_symbolStates[symbolIndex].lastProcessingTime = TimeCurrent();
+        m_symbolStates[symbolIndex].lastProcessingReason = routingReason;
 
         // Use Market Regime root state for routing decisions
         if (regimeAnalysis.IsTrending())
@@ -949,7 +969,6 @@ public:
         }
 
         // ============ STEP 4: GET SYMBOL INDEX ============
-        int symbolIndex = FindSymbolIndex(symbol);
         if (symbolIndex < 0)
         {
             DebugLogFile("SYMBOL_INDEX_ERROR", "❌ Symbol index not found - critical error");
@@ -1051,7 +1070,7 @@ public:
                 if (m_enableGoldNews && m_useNewsSignals)
                 {
                     double originalConfidence = package.overallConfidence;
-                    package.overallConfidence = GetNewsAdjustedConfidence(originalConfidence);
+                    // package.overallConfidence = GetNewsAdjustedConfidence(originalConfidence);
 
                     DebugLogFile("NEWS_ADJUSTMENT",
                                  StringFormat("News adjusted confidence: %.1f%% → %.1f%%",
@@ -2864,7 +2883,7 @@ private:
         if (regimeAnalysis.state == STATE_RANGING_HIGH_VOL)
         {
             DebugLogFile("HIGH_VOL_WARNING", "⚠️ High volatility range - extreme caution required");
-            if (package.trapProbability > 40)
+            if (package.trapProbability > 55)
             {
                 DebugLogFile("HIGH_VOL_TRAP_WARNING",
                              StringFormat("❌ Trap probability %.1f%% too high for high-vol range",
@@ -2934,13 +2953,13 @@ private:
             DebugLogFile("RANGE_NO_POSITION", "No positions open - evaluating range entry");
 
             // Check for trap zones
-            if (package.trapProbability > 50)
+            if (package.trapProbability > 55)
             {
                 DebugLogFile("RANGE_TRAP_WARNING",
                              StringFormat("⚠️ High trap probability (%.1f%%) for range entry in %s state",
                                           package.trapProbability, regimeAnalysis.GetStateString(regimeAnalysis.state)));
 
-                if (regimeAnalysis.state == STATE_RANGING_HIGH_VOL && package.trapProbability > 40)
+                if (regimeAnalysis.state == STATE_RANGING_HIGH_VOL && package.trapProbability > 55)
                 {
                     DebugLogFile("HIGH_VOL_TRAP_BLOCK", "❌ Blocked by high trap probability in high-vol range");
                     return ACTION_HOLD;
@@ -3866,6 +3885,16 @@ private:
         }
 
         return "";
+    }
+
+    string GetActualProcessorUsed(string symbol)
+    {
+        int index = FindSymbolIndex(symbol);
+        if (index >= 0)
+        {
+            return m_symbolStates[index].actualProcessorUsed;
+        }
+        return "NONE";
     }
 };
 
