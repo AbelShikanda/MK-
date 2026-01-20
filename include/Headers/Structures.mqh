@@ -1,18 +1,6 @@
-// DecisionEngineInterface.mqh
 
-// #ifndef DECISION_ENGINE_INTERFACE_MQH
-// #define DECISION_ENGINE_INTERFACE_MQH
 
-// ====================== TRADE PACKAGE INTERFACE ======================
-// Minimal interface that contains ONLY what DecisionEngine needs
-// struct DecisionEngineInterface
-// {
-
-//     DecisionEngineInterface() {
-//     }
-// };
-
-// #endif
+#include "../Headers/Enums.mqh"
 
 // ====================== DECISION ENGINE INTERFACE ======================
 struct DecisionEngineInterface
@@ -75,6 +63,8 @@ struct DecisionEngineInterface
 
     ENUM_TIMEFRAMES timeframe; // Timeframe of analysis
 
+    string packageType; // "TREND" or "RANGE"
+
     // Constructor
     DecisionEngineInterface()
     {
@@ -101,6 +91,7 @@ struct DecisionEngineInterface
         resistanceTouches = 0;
         hasComponentAnalysis = false;
         timeframe = PERIOD_CURRENT;
+        packageType = "NONE";   // "TREND" or "RANGE"
 
         isValid = false;
         weightedScore = 0;
@@ -335,6 +326,57 @@ struct DecisionEngineInterface
                             overallConfidence,
                             marketRegime);
     }
+    // Add this function somewhere before the DecisionEngineInterface struct or inside it
+    string TimeframeToString(ENUM_TIMEFRAMES tf) const
+    {
+        switch (tf)
+        {
+        case PERIOD_M1:
+            return "M1";
+        case PERIOD_M2:
+            return "M2";
+        case PERIOD_M3:
+            return "M3";
+        case PERIOD_M4:
+            return "M4";
+        case PERIOD_M5:
+            return "M5";
+        case PERIOD_M6:
+            return "M6";
+        case PERIOD_M10:
+            return "M10";
+        case PERIOD_M12:
+            return "M12";
+        case PERIOD_M15:
+            return "M15";
+        case PERIOD_M20:
+            return "M20";
+        case PERIOD_M30:
+            return "M30";
+        case PERIOD_H1:
+            return "H1";
+        case PERIOD_H2:
+            return "H2";
+        case PERIOD_H3:
+            return "H3";
+        case PERIOD_H4:
+            return "H4";
+        case PERIOD_H6:
+            return "H6";
+        case PERIOD_H8:
+            return "H8";
+        case PERIOD_H12:
+            return "H12";
+        case PERIOD_D1:
+            return "D1";
+        case PERIOD_W1:
+            return "W1";
+        case PERIOD_MN1:
+            return "MN1";
+        default:
+            return IntegerToString(tf);
+        }
+    }
 
     // Get debug info string
     string GetDebugInfo() const
@@ -386,103 +428,103 @@ struct DecisionEngineInterface
     }
 };
 
-    //+------------------------------------------------------------------+
-    //| Market Analysis Structure                                        |
-    //+------------------------------------------------------------------+
-    struct MarketAnalysis
+//+------------------------------------------------------------------+
+//| Market Analysis Structure                                        |
+//+------------------------------------------------------------------+
+struct MarketAnalysis
+{
+    ENUM_ROOT_REGIME rootState;
+    ENUM_MARKET_STATE state;
+    ENUM_MARKET_STATE nextLikelyState;
+    string action;
+    ENUM_POSITION_SIZE positionSize;
+    double stopDistance;
+    double takeProfitDistance;
+    double riskRewardRatio;
+    string direction;
+    double confidence;
+    string description;
+
+    // Quick helper methods
+    bool IsTrending() const { return rootState == REGIME_TRENDING; }
+    bool IsRanging() const { return rootState == REGIME_RANGING; }
+    bool IsContraction() const { return state == STATE_CONTRACTION; }
+    bool IsExpansion() const { return state == STATE_EXPANSION; }
+
+    // String representation
+    string ToString() const
     {
-        ENUM_ROOT_REGIME rootState;
-        ENUM_MARKET_STATE state;
-        ENUM_MARKET_STATE nextLikelyState;
-        string action;
-        ENUM_POSITION_SIZE positionSize;
-        double stopDistance;
-        double takeProfitDistance;
-        double riskRewardRatio;
-        string direction;
-        double confidence;
-        string description;
-
-        // Quick helper methods
-        bool IsTrending() const { return rootState == REGIME_TRENDING; }
-        bool IsRanging() const { return rootState == REGIME_RANGING; }
-        bool IsContraction() const { return state == STATE_CONTRACTION; }
-        bool IsExpansion() const { return state == STATE_EXPANSION; }
-
-        // String representation
-        string ToString() const
+        string posSizeStr;
+        switch (positionSize)
         {
-            string posSizeStr;
-            switch (positionSize)
-            {
-            case SIZE_ZERO:
-                posSizeStr = "ZERO";
-                break;
-            case SIZE_VERY_SMALL:
-                posSizeStr = "VERY SMALL";
-                break;
-            case SIZE_SMALL:
-                posSizeStr = "SMALL";
-                break;
-            case SIZE_MEDIUM:
-                posSizeStr = "MEDIUM";
-                break;
-            case SIZE_LARGE:
-                posSizeStr = "LARGE";
-                break;
-            }
-
-            return StringFormat(
-                "Root: %s | State: %s (%.0f%%) | Next: %s\n" +
-                    "Action: %s | Position: %s | Dir: %s\n" +
-                    "Stop: %.1f pips | TP: %.1f pips | R/R: %.1f\n" +
-                    "Description: %s",
-                GetRootStateString(rootState),
-                GetStateString(state),
-                confidence,
-                GetStateString(nextLikelyState),
-                action,
-                posSizeStr,
-                direction,
-                stopDistance * 10000, // Convert to pips for Forex
-                takeProfitDistance * 10000,
-                riskRewardRatio,
-                description);
+        case SIZE_ZERO:
+            posSizeStr = "ZERO";
+            break;
+        case SIZE_VERY_SMALL:
+            posSizeStr = "VERY SMALL";
+            break;
+        case SIZE_SMALL:
+            posSizeStr = "SMALL";
+            break;
+        case SIZE_MEDIUM:
+            posSizeStr = "MEDIUM";
+            break;
+        case SIZE_LARGE:
+            posSizeStr = "LARGE";
+            break;
         }
 
-        static string GetRootStateString(ENUM_ROOT_REGIME regime)
-        {
-            switch (regime)
-            {
-            case REGIME_TRENDING:
-                return "TRENDING";
-            case REGIME_RANGING:
-                return "RANGING";
-            default:
-                return "UNKNOWN";
-            }
-        }
+        return StringFormat(
+            "Root: %s | State: %s (%.0f%%) | Next: %s\n" +
+                "Action: %s | Position: %s | Dir: %s\n" +
+                "Stop: %.1f pips | TP: %.1f pips | R/R: %.1f\n" +
+                "Description: %s",
+            GetRootStateString(rootState),
+            GetStateString(state),
+            confidence,
+            GetStateString(nextLikelyState),
+            action,
+            posSizeStr,
+            direction,
+            stopDistance * 10000, // Convert to pips for Forex
+            takeProfitDistance * 10000,
+            riskRewardRatio,
+            description);
+    }
 
-        static string GetStateString(ENUM_MARKET_STATE state)
+    static string GetRootStateString(ENUM_ROOT_REGIME regime)
+    {
+        switch (regime)
         {
-            switch (state)
-            {
-            case STATE_RANGING_LOW_VOL:
-                return "Ranging Low Vol";
-            case STATE_RANGING_HIGH_VOL:
-                return "Ranging High Vol";
-            case STATE_TRENDING_LOW_VOL:
-                return "Trending Low Vol";
-            case STATE_TRENDING_HIGH_VOL:
-                return "Trending High Vol";
-            case STATE_CONTRACTION:
-                return "Contraction";
-            case STATE_EXPANSION:
-                return "Expansion";
-            case STATE_CHURN:
-                return "Churn";
-            default:
-                return "Unknown";
-            }
+        case REGIME_TRENDING:
+            return "TRENDING";
+        case REGIME_RANGING:
+            return "RANGING";
+        default:
+            return "UNKNOWN";
         }
-    };
+    }
+
+    static string GetStateString(ENUM_MARKET_STATE state)
+    {
+        switch (state)
+        {
+        case STATE_RANGING_LOW_VOL:
+            return "Ranging Low Vol";
+        case STATE_RANGING_HIGH_VOL:
+            return "Ranging High Vol";
+        case STATE_TRENDING_LOW_VOL:
+            return "Trending Low Vol";
+        case STATE_TRENDING_HIGH_VOL:
+            return "Trending High Vol";
+        case STATE_CONTRACTION:
+            return "Contraction";
+        case STATE_EXPANSION:
+            return "Expansion";
+        case STATE_CHURN:
+            return "Churn";
+        default:
+            return "Unknown";
+        }
+    }
+};

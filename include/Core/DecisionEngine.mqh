@@ -105,19 +105,19 @@ struct DecisionParams
     double trendSellThreshold;
     double trapProbabilityThreshold;
 
-    DecisionParams(double buyThresh = 60.0,
-                   double sellThresh = 60.0,
+    DecisionParams(double buyThresh = 65.0,
+                   double sellThresh = 65.0,
                    double closeThresh = 40.0,
                    double closeAllThresh = 40.0,
                    int cooldownMins = 30,
                    int maxPositions = 2,
                    double riskPct = 20.0,
                    double minRR = 1.0,
-                   double rangeBuy = 60.0,
-                   double rangeSell = 60.0,
-                   double trendBuy = 60.0,
-                   double trendSell = 60.0,
-                   double trapProb = 75.0)
+                   double rangeBuy = 75.0,
+                   double rangeSell = 75.0,
+                   double trendBuy = 65.0,
+                   double trendSell = 65.0,
+                   double trapProb = 65.0)
     {
         buyConfidenceThreshold = buyThresh;
         sellConfidenceThreshold = sellThresh;
@@ -505,11 +505,6 @@ private:
     datetime m_lastPackageCreation;
     PackageManager *m_packageManager;
 
-    // News settings
-    bool m_useNewsSignals;
-    bool m_enableGoldNews;
-    double m_newsSignalWeight;
-
 public:
     // ================= CONSTRUCTOR/DESTRUCTOR =================
     DecisionEngine()
@@ -528,18 +523,13 @@ public:
         // Routing defaults
         m_autoDetectProcessor = true;
         m_useMarketRegimeRouting = true;
-        m_trapThresholdForRange = 75.0;
+        m_trapThresholdForRange = 50.0;
 
         // Auto-package creation defaults
         m_autoPackageCreation = false;
         m_packageUpdateInterval = 10;
         m_lastPackageCreation = 0;
         m_packageManager = NULL;
-
-        // News settings defaults
-        m_useNewsSignals = false;
-        m_enableGoldNews = false;
-        m_newsSignalWeight = 0.3;
 
         ArrayResize(m_symbolStates, 0);
 
@@ -642,17 +632,6 @@ public:
         DebugLogFile("CONFIG_CHANGE", "PackageManager set for auto-package creation");
     }
 
-    void SetNewsSettings(bool enableGoldNews, bool useNewsSignals, double newsSignalWeight)
-    {
-        m_enableGoldNews = enableGoldNews;
-        m_useNewsSignals = useNewsSignals;
-        m_newsSignalWeight = newsSignalWeight;
-        DebugLogFile("CONFIG_CHANGE", StringFormat("News settings: Enable=%s, UseSignals=%s, Weight=%.1f",
-                                                   enableGoldNews ? "YES" : "NO",
-                                                   useNewsSignals ? "YES" : "NO",
-                                                   newsSignalWeight));
-    }
-
     // ================= SYMBOL MANAGEMENT =================
     bool RegisterSymbol(string symbol, DecisionParams &params)
     {
@@ -724,11 +703,11 @@ public:
         params.minRiskRewardRatio = 1.0;
 
         // Regime-specific thresholds for mk$
-        params.rangeBuyThreshold = 60.0; // Higher for range trading
-        params.rangeSellThreshold = 60.0;
+        params.rangeBuyThreshold = 75.0; // Higher for range trading
+        params.rangeSellThreshold = 75.0;
         params.trendBuyThreshold = 60.0; // Lower for trend following
         params.trendSellThreshold = 60.0;
-        params.trapProbabilityThreshold = 75.0; // mk$ avoids traps
+        params.trapProbabilityThreshold = 65.0; // mk$ avoids traps
 
         DebugLogFile("MK_PARAMS_CREATED",
                      StringFormat("Created mk$ params: Risk=%.1f%%, Cooldown=%dm",
@@ -804,246 +783,6 @@ public:
         return true;
     }
 
-    // ================= MAIN PUBLIC INTERFACE =================
-    DECISION_ACTION ProcessPackage(DecisionEngineInterface &package)
-    {
-        DebugLogFile("PROCESS_PACKAGE_START", "=====================================");
-        DebugLogFile("PROCESS_PACKAGE_START", StringFormat(">>> STARTING PACKAGE PROCESSING | Symbol: %s", package.symbol));
-
-        if (!m_initialized)
-        {
-            DebugLogFile("ERROR", "❌ Engine not initialized - cannot process package");
-            return ACTION_NONE;
-        }
-
-        string symbol = package.symbol;
-        DebugLogFile("PACKAGE_DETAILS", StringFormat("Package Details: Type=%s, Confidence=%.1f%%, Dir=%s, Regime=%s, Action=%s, Trap=%.1f%%",
-                                                     package.IsRangePackage() ? "RANGE" : "TREND",
-                                                     package.overallConfidence,
-                                                     package.dominantDirection,
-                                                     package.marketRegime,
-                                                     package.recommendedAction,
-                                                     package.trapProbability));
-
-        // ============ STEP 1: GET MARKET REGIME ANALYSIS ============
-        DebugLogFile("MARKET_REGIME_CHECK", "--- MARKET REGIME ANALYSIS ---");
-
-        MarketAnalysis regimeAnalysis = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
-
-        DebugLogFile("MARKET_REGIME_RESULT", StringFormat("Market Regime Analysis Complete:", ""));
-        DebugLogFile("MARKET_REGIME_RESULT", StringFormat("  - Root State: %s", regimeAnalysis.GetRootStateString(regimeAnalysis.rootState)));
-        DebugLogFile("MARKET_REGIME_RESULT", StringFormat("  - Market State: %s", regimeAnalysis.GetStateString(regimeAnalysis.state)));
-        DebugLogFile("MARKET_REGIME_RESULT", StringFormat("  - Direction: %s", regimeAnalysis.direction));
-        DebugLogFile("MARKET_REGIME_RESULT", StringFormat("  - Confidence: %.0f%%", regimeAnalysis.confidence));
-        DebugLogFile("MARKET_REGIME_RESULT", StringFormat("  - Action: %s", regimeAnalysis.action));
-        DebugLogFile("MARKET_REGIME_RESULT", StringFormat("  - Position Size: %s", GetPositionSizeString(regimeAnalysis.positionSize)));
-        DebugLogFile("MARKET_REGIME_RESULT", StringFormat("  - Stop Distance: %.1f pips", regimeAnalysis.stopDistance));
-        DebugLogFile("MARKET_REGIME_RESULT", StringFormat("  - TP Distance: %.1f pips", regimeAnalysis.takeProfitDistance));
-        DebugLogFile("MARKET_REGIME_RESULT", StringFormat("  - R/R Ratio: %.1f", regimeAnalysis.riskRewardRatio));
-
-        // Create combined regime string for package
-        string combinedRegimeStr = regimeAnalysis.GetRootStateString(regimeAnalysis.rootState) + "_" +
-                                   regimeAnalysis.GetStateString(regimeAnalysis.state);
-
-        // ============ STEP 2: INTELLIGENT ROUTING BASED ON MARKET REGIME ============
-        DebugLogFile("ROUTING_START", "--- INTELLIGENT PROCESSOR ROUTING ---");
-
-        int symbolIndex = FindSymbolIndex(symbol);
-        if (symbolIndex < 0)
-        {
-            DebugLogFile("ERROR", "Symbol index not found: " + symbol);
-            // return ACTION_NONE;
-        }
-        DECISION_ACTION decision = ACTION_NONE;
-        string processorType = "UNKNOWN";
-        string routingReason = "";
-
-        // In the routing section, store the processor info:
-        m_symbolStates[symbolIndex].actualProcessorUsed = processorType;
-        m_symbolStates[symbolIndex].lastProcessingTime = TimeCurrent();
-        m_symbolStates[symbolIndex].lastProcessingReason = routingReason;
-
-        // Use Market Regime root state for routing decisions
-        if (regimeAnalysis.IsTrending())
-        {
-            DebugLogFile("ROUTING_DECISION", StringFormat("📈 TRENDING market detected: %s",
-                                                          regimeAnalysis.GetRootStateString(regimeAnalysis.rootState)));
-
-            // Check market state for nuanced decisions
-            if (regimeAnalysis.state == STATE_TRENDING_LOW_VOL)
-            {
-                routingReason = "Healthy low-volatility trend - using TREND processor";
-                DebugLogFile("TREND_STATE", "✅ Healthy trend - optimal for trend following");
-            }
-            else if (regimeAnalysis.state == STATE_TRENDING_HIGH_VOL)
-            {
-                routingReason = "High-volatility/Exhaustion trend - using TREND processor with caution";
-                DebugLogFile("TREND_STATE", "⚠️ High volatility trend - be cautious");
-            }
-            else if (regimeAnalysis.state == STATE_EXPANSION)
-            {
-                routingReason = "Trend expansion/breakout - aggressive TREND processor";
-                DebugLogFile("TREND_STATE", "🚀 Trend expansion - be aggressive");
-            }
-
-            decision = ProcessTrendPackage(package);
-            processorType = "TREND";
-        }
-        else if (regimeAnalysis.IsRanging())
-        {
-            DebugLogFile("ROUTING_DECISION", StringFormat("📊 RANGING market detected: %s",
-                                                          regimeAnalysis.GetRootStateString(regimeAnalysis.rootState)));
-
-            // Check market state for nuanced decisions
-            if (regimeAnalysis.state == STATE_RANGING_LOW_VOL)
-            {
-                routingReason = "Low-volatility range - using RANGE processor for mean reversion";
-                DebugLogFile("RANGE_STATE", "📊 Low volatility range - good for mean reversion");
-            }
-            else if (regimeAnalysis.state == STATE_RANGING_HIGH_VOL)
-            {
-                routingReason = "High-volatility range - using RANGE processor with caution";
-                DebugLogFile("RANGE_STATE", "⚠️ High volatility range - be very cautious");
-            }
-            else if (regimeAnalysis.state == STATE_CONTRACTION)
-            {
-                routingReason = "Range contraction/squeeze - preparing for breakout";
-                DebugLogFile("RANGE_STATE", "⚡ Range contraction - preparing for breakout");
-            }
-            else if (regimeAnalysis.state == STATE_CHURN)
-            {
-                routingReason = "Churn/Exhaustion - using RANGE processor with tight stops";
-                DebugLogFile("RANGE_STATE", "🌀 Market churn - tight stops required");
-            }
-
-            decision = ProcessRangePackage(package);
-            processorType = "RANGE";
-        }
-        else
-        {
-            DebugLogFile("ROUTING_DECISION", "❓ UNKNOWN market regime");
-            routingReason = "Market regime unclear - defaulting to TREND processor";
-            decision = ProcessTrendPackage(package);
-            processorType = "TREND";
-        }
-
-        DebugLogFile("ROUTING_COMPLETE", StringFormat("✅ Routed to %s processor | Reason: %s", processorType, routingReason));
-
-        // ============ STEP 3: SYMBOL REGISTRATION CHECK ============
-        DebugLogFile("SYMBOL_CHECK_START", "--- SYMBOL REGISTRATION ---");
-        if (!HasSymbol(symbol))
-        {
-            DebugLogFile("AUTO_REGISTRATION", StringFormat("Symbol %s not registered - auto-registering with regime-based defaults", symbol));
-
-            // ============ FIX HERE ============
-            // OLD (line 51):
-            // DecisionParams params = CreateRegimeBasedParams(regimeAnalysis);
-
-            // NEW: Create minimal safe defaults first, then adapt to regime
-            DecisionParams minimalParams; // Uses 50% thresholds, 5% risk (safe defaults)
-            DebugLogFile("AUTO_REG_CREATE_BASE", StringFormat("Created minimal base params: Buy=%.1f%%, Sell=%.1f%%, Risk=%.1f%%",
-                                                              minimalParams.buyConfidenceThreshold,
-                                                              minimalParams.sellConfidenceThreshold,
-                                                              minimalParams.riskPercent));
-
-            // Now adapt to current market regime
-            DecisionParams params = CreateRegimeBasedParams(regimeAnalysis, minimalParams);
-            DebugLogFile("AUTO_REG_ADAPTED", StringFormat("Adapted params for %s regime: Buy=%.1f%%, Sell=%.1f%%, Cooldown=%dm",
-                                                          regimeAnalysis.GetRootStateString(regimeAnalysis.rootState),
-                                                          params.buyConfidenceThreshold,
-                                                          params.sellConfidenceThreshold,
-                                                          params.cooldownMinutes));
-            // ============ END FIX ============
-
-            if (!RegisterSymbol(symbol, params))
-            {
-                DebugLogFile("AUTO_REG_ERROR", "❌ Failed to auto-register symbol");
-                LogPackageProcessingResult(symbol, processorType, decision, "FAILED - Auto-registration error");
-                return ACTION_NONE;
-            }
-            DebugLogFile("AUTO_REG_SUCCESS", "✅ Symbol auto-registered with regime-based params");
-        }
-        else
-        {
-            DebugLogFile("SYMBOL_FOUND", "✅ Symbol already registered");
-        }
-
-        // ============ STEP 4: GET SYMBOL INDEX ============
-        if (symbolIndex < 0)
-        {
-            DebugLogFile("SYMBOL_INDEX_ERROR", "❌ Symbol index not found - critical error");
-            LogPackageProcessingResult(symbol, processorType, decision, "FAILED - Symbol index error");
-            return ACTION_NONE;
-        }
-
-        DebugLogFile("SYMBOL_INDEX_FOUND", StringFormat("✅ Found symbol at index %d | Magic: %d",
-                                                        symbolIndex, m_symbolStates[symbolIndex].magicNumber));
-
-        // ============ STEP 5: UPDATE SYMBOL STATE WITH REGIME INFO ============
-        DebugLogFile("METADATA_UPDATE", "--- UPDATING WITH MARKET REGIME INFO ---");
-        m_symbolStates[symbolIndex].lastProcessorUsed = processorType;
-
-        // Store regime analysis for later use
-        string previousRegime = package.marketRegime;
-        package.marketRegime = regimeAnalysis.GetRootStateString(regimeAnalysis.rootState);
-
-        // Add additional regime info to package
-        package.extraInfo1 = StringFormat("MarketState:%s", regimeAnalysis.GetStateString(regimeAnalysis.state));
-        package.extraInfo2 = StringFormat("PositionSize:%s", GetPositionSizeString(regimeAnalysis.positionSize));
-        package.extraInfo3 = StringFormat("Stop:%.1f|TP:%.1f|RR:%.1f",
-                                          regimeAnalysis.stopDistance,
-                                          regimeAnalysis.takeProfitDistance,
-                                          regimeAnalysis.riskRewardRatio);
-
-        DebugLogFile("REGIME_UPDATE", StringFormat("Package updated: Regime=%s, State=%s, PosSize=%s",
-                                                   package.marketRegime,
-                                                   regimeAnalysis.GetStateString(regimeAnalysis.state),
-                                                   GetPositionSizeString(regimeAnalysis.positionSize)));
-
-        // ============ STEP 6: UPDATE METRICS WITH REGIME INFO ============
-        DebugLogFile("DECISION_MADE_ONLY",
-                     StringFormat("Decision made for %s: %s | Conf: %.1f%% | Processor: %s | Waiting for close...",
-                                  symbol, DecisionToString(decision), package.overallConfidence, processorType));
-
-        // ============ STEP 7: LOG FINAL RESULTS WITH REGIME INFO ============
-        DebugLogFile("FINAL_RESULTS", "--- PROCESSING RESULTS WITH MARKET REGIME ---");
-
-        string decisionStr = DecisionToString(decision);
-        DebugLogFile("FINAL_DECISION", StringFormat("Final Decision: %s", decisionStr));
-
-        LogPackageProcessingResult(symbol, processorType, decision,
-                                   StringFormat("COMPLETED | MarketState: %s",
-                                                regimeAnalysis.GetStateString(regimeAnalysis.state)));
-
-        // ============ STEP 8: RETURN DECISION ============
-        if (decision == ACTION_NONE || decision == ACTION_HOLD)
-        {
-            DebugLogFile("NO_ACTION_TAKEN", StringFormat("⚠️ No action taken for %s | Decision: %s | MarketState: %s",
-                                                         symbol, decisionStr,
-                                                         regimeAnalysis.GetStateString(regimeAnalysis.state)));
-        }
-        else if (decision == ACTION_WAITING_FOR_PACKAGE)
-        {
-            DebugLogFile("WAITING_FOR_PACKAGE", StringFormat("⏳ Waiting for fresh package for %s | MarketState: %s",
-                                                             symbol, regimeAnalysis.GetStateString(regimeAnalysis.state)));
-        }
-        else
-        {
-            DebugLogFile("ACTIONABLE_DECISION", StringFormat("🎯 Actionable decision for %s: %s | Regime: %s | Processor: %s",
-                                                             symbol, decisionStr,
-                                                             regimeAnalysis.GetRootStateString(regimeAnalysis.rootState),
-                                                             processorType));
-        }
-
-        DebugLogFile("PROCESS_PACKAGE_END", StringFormat("<<< PACKAGE PROCESSING COMPLETE | Symbol: %s | Decision: %s | Regime: %s | State: %s",
-                                                         symbol, decisionStr,
-                                                         regimeAnalysis.GetRootStateString(regimeAnalysis.rootState),
-                                                         regimeAnalysis.GetStateString(regimeAnalysis.state)));
-        DebugLogFile("PROCESS_PACKAGE_END", "=====================================\n");
-
-        return decision;
-    }
-
     // ================= AUTO-PACKAGE CREATION =================
     void CreateAndProcessPackages()
     {
@@ -1066,17 +805,6 @@ public:
 
             if (package.isValid)
             {
-                // Apply news adjustment if enabled
-                if (m_enableGoldNews && m_useNewsSignals)
-                {
-                    double originalConfidence = package.overallConfidence;
-                    // package.overallConfidence = GetNewsAdjustedConfidence(originalConfidence);
-
-                    DebugLogFile("NEWS_ADJUSTMENT",
-                                 StringFormat("News adjusted confidence: %.1f%% → %.1f%%",
-                                              originalConfidence, package.overallConfidence));
-                }
-
                 // Process the package
                 ProcessPackage(package);
             }
@@ -1103,31 +831,7 @@ public:
                                   regimeAnalysis.confidence));
 
         // ========== STEP 2: CREATE PACKAGE BASED ON MARKET REGIME ==========
-        if (regimeAnalysis.IsRanging())
-        {
-            // ========== CREATE RANGE PACKAGE ==========
-            DebugLogFile("PACKAGE_TYPE", "📊 MARKET IS RANGING - Creating RANGE package");
-
-            // Use RangeIntelligence::AnalyzeRange instead of non-existent AnalyzeForTraps
-            RangeAnalysisResult rangeResult = RangeIntelligence::AnalyzeRange(symbol, PERIOD_M15);
-
-            // Populate RANGE package with regime info
-            package.marketRegime = "RANGING";
-            package.trapProbability = rangeResult.trapProbability;
-            package.recommendedAction = regimeAnalysis.action; // Use regime's action recommendation
-            package.overallConfidence = (regimeAnalysis.confidence * 0.2) + (rangeResult.overallConfidence * 0.8);
-            package.dominantDirection = rangeResult.overallDirection; // CHANGED: use overallDirection
-            package.isTrapZone = rangeResult.isTrapZone;
-            package.isAvoidSignal = (regimeAnalysis.action == "Wait for clarity" ||
-                                     rangeResult.rangeAction == "AVOID_HIGH_TRAP"); // CHANGED: use rangeAction
-            package.trapReason = StringFormat("Trap: %.1f%%, Bias: %s",
-                                              rangeResult.trapProbability, rangeResult.rangeBiasDirection);
-            package.isValid = true;
-            package.signalReason = StringFormat("Market Ranging (%s): %s",
-                                                regimeAnalysis.GetStateString(regimeAnalysis.state),
-                                                regimeAnalysis.description);
-        }
-        else if (regimeAnalysis.IsTrending())
+        if (regimeAnalysis.IsTrending())
         {
             // ========== CREATE TREND PACKAGE ==========
             DebugLogFile("PACKAGE_TYPE", "📈 MARKET IS TRENDING - Creating TREND package");
@@ -1135,6 +839,7 @@ public:
             if (m_packageManager == NULL || !m_packageManager.IsInitialized())
             {
                 DebugLogFile("ERROR", "❌ PackageManager not available");
+                package.isValid = false;
                 return package;
             }
 
@@ -1143,11 +848,13 @@ public:
             if (!trendPackage.isValid)
             {
                 DebugLogFile("ERROR", "❌ No valid TrendPackage available");
+                package.isValid = false;
                 return package;
             }
 
             // Populate TREND package with regime info
             package.marketRegime = "TRENDING";
+            package.packageType = "TREND"; // Set explicit package type
             package.overallConfidence = (regimeAnalysis.confidence * 0.2) + (trendPackage.overallConfidence * 0.8);
             package.dominantDirection = trendPackage.directionAnalysis.dominantDirection;
             package.weightedScore = trendPackage.weightedScore;
@@ -1156,11 +863,48 @@ public:
                                                 regimeAnalysis.GetStateString(regimeAnalysis.state),
                                                 regimeAnalysis.description);
 
-            // Set default values for range fields
-            package.recommendedAction = regimeAnalysis.action;
-            package.trapProbability = 0;
+            // Set trend-specific fields
+            package.recommendedAction = "TREND_FOLLOW";
+            package.trapProbability = 0; // Trend packages typically have low trap probability
             package.isTrapZone = false;
             package.isAvoidSignal = false;
+            package.rangeAction = "NO_RANGE"; // Not a range trade
+        }
+        else if (regimeAnalysis.IsRanging())
+        {
+            // ========== CREATE RANGE PACKAGE ==========
+            DebugLogFile("PACKAGE_TYPE", "📊 MARKET IS RANGING - Creating RANGE package");
+
+            // Use RangeIntelligence::AnalyzeRange
+            RangeAnalysisResult rangeResult = RangeIntelligence::AnalyzeRange(symbol, PERIOD_M15);
+
+            // Populate RANGE package with regime info
+            package.marketRegime = "RANGING";
+            package.packageType = "RANGE"; // Set explicit package type
+            package.trapProbability = rangeResult.trapProbability;
+            package.recommendedAction = rangeResult.rangeAction;
+            package.overallConfidence = (regimeAnalysis.confidence * 0.2) + (rangeResult.overallConfidence * 0.8);
+            package.dominantDirection = rangeResult.rangeBiasDirection;
+            package.isTrapZone = rangeResult.isTrapZone;
+            package.isAvoidSignal = (regimeAnalysis.action == "Wait for clarity" ||
+                                     rangeResult.rangeAction == "AVOID_HIGH_TRAP");
+            package.trapReason = StringFormat("Trap: %.1f%%, Bias: %s",
+                                              rangeResult.trapProbability, rangeResult.rangeBiasDirection);
+            package.isValid = true;
+            package.signalReason = StringFormat("Market Ranging (%s): %s",
+                                                regimeAnalysis.GetStateString(regimeAnalysis.state),
+                                                regimeAnalysis.description);
+
+            // Copy range-specific fields
+            package.entryQualityScore = rangeResult.entryQualityScore;
+            package.riskRewardScore = rangeResult.riskRewardScore;
+            package.rangeBiasDirection = rangeResult.rangeBiasDirection;
+            package.rangeBiasConfidence = rangeResult.rangeBiasConfidence;
+            package.rangeAction = rangeResult.rangeAction;
+            package.supportLevel = rangeResult.supportLevel;
+            package.resistanceLevel = rangeResult.resistanceLevel;
+            package.supportTouches = rangeResult.supportTouches;
+            package.resistanceTouches = rangeResult.resistanceTouches;
         }
         else
         {
@@ -1168,16 +912,18 @@ public:
             DebugLogFile("PACKAGE_TYPE", "❓ MARKET REGIME UNKNOWN - Creating default package");
 
             package.marketRegime = "UNKNOWN";
+            package.packageType = "RANGE"; // Default to range for safety
             package.overallConfidence = regimeAnalysis.confidence;
             package.dominantDirection = regimeAnalysis.direction;
             package.isValid = true;
             package.signalReason = "Market Regime Unknown: " + regimeAnalysis.description;
 
-            // Set default values
-            package.recommendedAction = regimeAnalysis.action;
-            package.trapProbability = 0;
-            package.isTrapZone = false;
-            package.isAvoidSignal = false;
+            // Set RANGE-style defaults for safety
+            package.recommendedAction = "Wait for clarity";
+            package.trapProbability = 50.0;
+            package.isTrapZone = true;
+            package.isAvoidSignal = true;
+            package.rangeAction = "AVOID_HIGH_TRAP";
         }
 
         // ========== STEP 3: SET COMMON FIELDS WITH REGIME INFO ==========
@@ -1221,7 +967,8 @@ public:
         package.extraInfo3 = StringFormat("Conf:%.0f|Action:%s", regimeAnalysis.confidence, regimeAnalysis.action);
 
         DebugLogFile("PACKAGE_CREATION_COMPLETE",
-                     StringFormat("🎯 Package created: Regime=%s, State=%s, Action=%s, Dir=%s, Conf=%.1f%%",
+                     StringFormat("🎯 Package created: Type=%s, Regime=%s, State=%s, Action=%s, Dir=%s, Conf=%.1f%%",
+                                  package.packageType,
                                   package.marketRegime,
                                   regimeAnalysis.GetStateString(regimeAnalysis.state),
                                   package.recommendedAction,
@@ -1229,19 +976,6 @@ public:
                                   package.overallConfidence));
 
         return package;
-    }
-
-    // ================= NEWS ADJUSTMENT =================
-    double GetNewsAdjustedConfidence(double technicalConfidence)
-    {
-        if (!m_enableGoldNews || !m_useNewsSignals)
-        {
-            return technicalConfidence;
-        }
-
-        // In a real implementation, you would get news signal here
-        // For now, return the technical confidence
-        return technicalConfidence;
     }
 
     // ================= ADDITIONAL HELPER METHODS =================
@@ -1282,6 +1016,224 @@ public:
         default:
             return "UNKNOWN";
         }
+    }
+
+    // ================= MAIN PUBLIC INTERFACE =================
+    DECISION_ACTION ProcessPackage(DecisionEngineInterface &package)
+    {
+        DebugLogFile("PROCESS_PACKAGE_START", "=====================================");
+        DebugLogFile("PROCESS_PACKAGE_START", StringFormat(">>> PURE PROCESSOR MODE | Symbol: %s", package.symbol));
+
+        if (!m_initialized)
+        {
+            DebugLogFile("ERROR", "❌ Engine not initialized");
+            return ACTION_NONE;
+        }
+
+        string symbol = package.symbol;
+
+        // ============ STEP 1: VALIDATE PACKAGE ============
+        DebugLogFile("PACKAGE_VALIDATION", "--- VALIDATING INCOMING PACKAGE ---");
+
+        if (!package.isValid)
+        {
+            DebugLogFile("ERROR", "❌ Package is invalid");
+            return ACTION_NONE;
+        }
+
+        if (package.symbol == "")
+        {
+            DebugLogFile("ERROR", "❌ Package symbol is empty");
+            return ACTION_NONE;
+        }
+
+        DebugLogFile("PACKAGE_DETAILS", StringFormat("Type=%s, Confidence=%.1f%%, Dir=%s, Regime=%s, Action=%s, Trap=%.1f%%",
+                                                     package.packageType,
+                                                     package.overallConfidence,
+                                                     package.dominantDirection,
+                                                     package.marketRegime,
+                                                     package.recommendedAction,
+                                                     package.trapProbability));
+
+        // ============ STEP 2: USE PACKAGE REGIME FOR ROUTING ============
+        DebugLogFile("ROUTING_START", "--- ROUTING BASED ON PACKAGE REGIME ---");
+
+        DECISION_ACTION decision = ACTION_NONE;
+        string processorType = "UNKNOWN";
+        string routingReason = "";
+
+        // Get package type from packageType field (preferred)
+        string packageType = package.packageType;
+
+        // If packageType not set, infer from marketRegime
+        if (packageType == "NONE" || packageType == "")
+        {
+            if (StringFind(package.marketRegime, "RANGING") >= 0 ||
+                StringFind(package.marketRegime, "CONSOLIDATION") >= 0)
+            {
+                packageType = "RANGE";
+            }
+            else if (StringFind(package.marketRegime, "TRENDING") >= 0)
+            {
+                packageType = "TREND";
+            }
+            else
+            {
+                // Default inference based on other fields
+                if (StringFind(package.recommendedAction, "FADE") >= 0 ||
+                    package.trapProbability > 40)
+                {
+                    packageType = "RANGE";
+                }
+                else
+                {
+                    packageType = "TREND";
+                }
+            }
+            DebugLogFile("PACKAGE_TYPE_INFERRED", StringFormat("Inferred package type as: %s", packageType));
+        }
+
+        DebugLogFile("PACKAGE_TYPE", StringFormat("Final package type: %s", packageType));
+
+        // ============ STEP 3: GET CURRENT MARKET REGIME (FOR MONITORING ONLY) ============
+        DebugLogFile("MARKET_MONITOR", "--- GETTING CURRENT MARKET REGIME (MONITORING ONLY) ---");
+
+        MarketAnalysis currentRegime = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
+
+        DebugLogFile("CURRENT_REGIME", StringFormat("Current Market: Root=%s, State=%s, Conf=%.0f%%",
+                                                    currentRegime.GetRootStateString(currentRegime.rootState),
+                                                    currentRegime.GetStateString(currentRegime.state),
+                                                    currentRegime.confidence));
+
+        DebugLogFile("PACKAGE_REGIME", StringFormat("Package Regime: %s", package.marketRegime));
+
+        // ============ STEP 4: PURE ROUTING BASED ON PACKAGE TYPE ============
+        DebugLogFile("PURE_ROUTING", "--- EXECUTING PURE ROUTING ---");
+
+        if (packageType == "TREND")
+        {
+            DebugLogFile("ROUTING_DECISION", "📈 PACKAGE IS TREND TYPE - routing to TREND processor");
+
+            // Check regime alignment for monitoring
+            if (StringFind(package.marketRegime, "RANGING") >= 0)
+            {
+                DebugLogFile("REGIME_MISMATCH_MONITOR", "⚠️ MONITORING: Package marked as TREND but regime says RANGING");
+                routingReason = "Trend package (regime mismatch monitoring)";
+            }
+            else
+            {
+                routingReason = "Trend package - optimal routing";
+            }
+
+            decision = ProcessTrendPackage(package);
+            processorType = "TREND";
+        }
+        else if (packageType == "RANGE")
+        {
+            DebugLogFile("ROUTING_DECISION", "📊 PACKAGE IS RANGE TYPE - routing to RANGE processor");
+
+            // Check regime alignment for monitoring
+            if (StringFind(package.marketRegime, "TRENDING") >= 0)
+            {
+                DebugLogFile("REGIME_MISMATCH_MONITOR", "⚠️ MONITORING: Package marked as RANGE but regime says TRENDING");
+                routingReason = "Range package (regime mismatch monitoring)";
+            }
+            else
+            {
+                routingReason = "Range package - optimal routing";
+            }
+
+            decision = ProcessRangePackage(package);
+            processorType = "RANGE";
+        }
+        else
+        {
+            DebugLogFile("ROUTING_ERROR", "❌ Unknown package type: " + packageType);
+            return ACTION_NONE;
+        }
+
+        DebugLogFile("ROUTING_COMPLETE", StringFormat("✅ Routed to %s processor | Reason: %s", processorType, routingReason));
+
+        // ============ STEP 5: SYMBOL REGISTRATION ============
+        DebugLogFile("SYMBOL_CHECK", "--- SYMBOL REGISTRATION ---");
+
+        if (!HasSymbol(symbol))
+        {
+            DebugLogFile("AUTO_REGISTRATION", StringFormat("Auto-registering %s", symbol));
+
+            DecisionParams minimalParams;
+            DecisionParams params = CreateRegimeBasedParams(currentRegime, minimalParams);
+
+            if (!RegisterSymbol(symbol, params))
+            {
+                DebugLogFile("AUTO_REG_ERROR", "❌ Failed to auto-register symbol");
+                return ACTION_NONE;
+            }
+        }
+
+        // ============ STEP 6: GET SYMBOL INDEX ============
+        int symbolIndex = FindSymbolIndex(symbol);
+        if (symbolIndex < 0)
+        {
+            DebugLogFile("SYMBOL_INDEX_ERROR", "❌ Symbol index not found");
+            return ACTION_NONE;
+        }
+
+        // ============ STEP 7: UPDATE SYMBOL STATE ============
+        m_symbolStates[symbolIndex].lastProcessorUsed = processorType;
+        m_symbolStates[symbolIndex].actualProcessorUsed = processorType;
+        m_symbolStates[symbolIndex].lastProcessingTime = TimeCurrent();
+        m_symbolStates[symbolIndex].lastProcessingReason = routingReason;
+
+        // Store current regime for monitoring (DO NOT override package regime)
+        package.extraInfo1 = StringFormat("CurrentRegime:%s", currentRegime.GetRootStateString(currentRegime.rootState));
+        package.extraInfo2 = StringFormat("CurrentState:%s", currentRegime.GetStateString(currentRegime.state));
+        package.extraInfo3 = StringFormat("Monitor:PackageRegime=%s|CurrentRegime=%s|Match=%s",
+                                          package.marketRegime,
+                                          currentRegime.GetRootStateString(currentRegime.rootState),
+                                          (StringFind(package.marketRegime, "TRENDING") >= 0 && currentRegime.IsTrending()) ||
+                                                  (StringFind(package.marketRegime, "RANGING") >= 0 && currentRegime.IsRanging())
+                                              ? "YES"
+                                              : "NO");
+
+        // ============ STEP 8: LOG RESULTS ============
+        string decisionStr = DecisionToString(decision);
+
+        // Calculate regime match for monitoring
+        bool regimeMatch = false;
+        if (StringFind(package.marketRegime, "TRENDING") >= 0 && currentRegime.IsTrending())
+            regimeMatch = true;
+        else if (StringFind(package.marketRegime, "RANGING") >= 0 && currentRegime.IsRanging())
+            regimeMatch = true;
+
+        LogPackageProcessingResult(symbol, processorType, decision,
+                                   StringFormat("PURE_PROCESSOR | PackageRegime: %s | CurrentRegime: %s | Match: %s",
+                                                package.marketRegime,
+                                                currentRegime.GetRootStateString(currentRegime.rootState),
+                                                regimeMatch ? "YES" : "NO"));
+
+        if (decision == ACTION_NONE || decision == ACTION_HOLD)
+        {
+            DebugLogFile("NO_ACTION", StringFormat("⏸️ No action | Decision: %s", decisionStr));
+        }
+        else if (decision == ACTION_WAITING_FOR_PACKAGE)
+        {
+            DebugLogFile("WAITING", StringFormat("⏳ Waiting for fresh package", ""));
+        }
+        else
+        {
+            DebugLogFile("ACTIONABLE", StringFormat("🎯 Action: %s | Processor: %s | PackageRegime: %s",
+                                                    decisionStr, processorType, package.marketRegime));
+        }
+
+        DebugLogFile("PROCESS_PACKAGE_END", StringFormat("<<< PURE PROCESSING COMPLETE | Symbol: %s | Decision: %s | PackageType: %s | PackageRegime: %s | CurrentRegime: %s | Processor: %s",
+                                                         symbol, decisionStr, packageType,
+                                                         package.marketRegime,
+                                                         currentRegime.GetRootStateString(currentRegime.rootState),
+                                                         processorType));
+        DebugLogFile("PROCESS_PACKAGE_END", "=====================================\n");
+
+        return decision;
     }
 
     // ================= PROCESS TREND PACKAGE =================
@@ -1457,6 +1409,416 @@ public:
         m_symbolStates[symbolIndex].lastDecision = decision;
 
         return decision;
+    }
+
+    // ================= ENHANCED TREND DECISION WITH LIFECYCLE =================
+    DECISION_ACTION MakeTrendDecision(int symbolIndex, DecisionEngineInterface &package, PositionAnalysis &positions)
+    {
+        DebugLogFile("MAKE_TREND_DECISION", "=====================================");
+        DebugLogFile("MAKE_TREND_DECISION", StringFormat("=== MAKING TREND DECISION (RESPECTING PACKAGE) === | Symbol: %s",
+                                                         m_symbolStates[symbolIndex].symbol));
+
+        if (symbolIndex < 0 || symbolIndex >= m_totalSymbols)
+        {
+            DebugLogFile("ERROR", "❌ Invalid symbol index");
+            return ACTION_NONE;
+        }
+
+        string symbol = m_symbolStates[symbolIndex].symbol;
+
+        // ============ STEP 1: GET MARKET REGIME FOR MONITORING ONLY ============
+        DebugLogFile("MARKET_MONITOR", "--- Getting current market (MONITORING ONLY) ---");
+        MarketAnalysis currentMarket = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
+
+        // PURE MONITORING - no rejection
+        bool marketIsTrending = currentMarket.IsTrending();
+        string marketState = currentMarket.GetRootStateString(currentMarket.rootState);
+
+        DebugLogFile("MARKET_MONITOR_INFO",
+                     StringFormat("Current Market: %s | State: %s | Conf: %.0f%% | IsTrending: %s",
+                                  marketState,
+                                  currentMarket.GetStateString(currentMarket.state),
+                                  currentMarket.confidence,
+                                  marketIsTrending ? "YES" : "NO"));
+
+        // ============ STEP 2: USE PACKAGE VALUES FOR DECISION MAKING ============
+        DebugLogFile("PACKAGE_RESPECT", "--- RESPECTING PACKAGE VALUES ---");
+
+        // Use package values EXACTLY as provided
+        double confidence = package.overallConfidence; // NO adjustments
+        string direction = package.dominantDirection;  // NO overrides
+        string packageRegime = package.marketRegime;   // Package's own regime
+
+        DebugLogFile("PACKAGE_VALUES",
+                     StringFormat("Package: Regime=%s, Dir=%s, Conf=%.1f%%, Type=%s",
+                                  packageRegime, direction, confidence, package.packageType));
+
+        // ============ STEP 3: SET THRESHOLDS BASED ON PACKAGE REGIME ============
+        DebugLogFile("THRESHOLDS", "--- Setting thresholds based on PACKAGE regime ---");
+        DecisionParams params = m_symbolStates[symbolIndex].params;
+
+        // Use package regime to determine thresholds (respects package intent)
+        double buyThreshold = params.GetBuyThreshold(packageRegime);   // Uses packageRegime
+        double sellThreshold = params.GetSellThreshold(packageRegime); // Uses packageRegime
+
+        DebugLogFile("THRESHOLD_INFO",
+                     StringFormat("Using thresholds for PackageRegime=%s: Buy=%.1f%%, Sell=%.1f%%",
+                                  packageRegime, buyThreshold, sellThreshold));
+
+        // ============ STEP 4: MONITOR CONTEXT (NO ADJUSTMENTS) ============
+        DebugLogFile("CONTEXT_MONITOR", "--- Monitoring context (NO adjustments) ---");
+
+        // Monitor if package regime matches current market
+        bool contextMatch = false;
+        string contextNote = "";
+
+        if ((StringFind(packageRegime, "TRENDING") >= 0 || package.packageType == "TREND") && marketIsTrending)
+        {
+            contextMatch = true;
+            contextNote = "Optimal: Trend package in trending market";
+            DebugLogFile("CONTEXT_MONITOR", "✅ MONITOR: Optimal context");
+        }
+        else if ((StringFind(packageRegime, "TRENDING") >= 0 || package.packageType == "TREND") && !marketIsTrending)
+        {
+            contextMatch = false;
+            contextNote = StringFormat("Monitor: Trend package in %s market (continuing anyway)", marketState);
+            DebugLogFile("CONTEXT_MONITOR", StringFormat("⚠️ MONITOR: %s", contextNote));
+        }
+
+        // Store monitoring info (NO adjustments to package)
+        string originalExtraInfo = package.extraInfo3;
+        package.extraInfo3 = StringFormat("%s|Monitor:CurrMarket=%s|ContextMatch=%s",
+                                          originalExtraInfo, marketState, contextMatch ? "YES" : "NO");
+
+        // ============ STEP 5: HANDLE NO POSITION CASE ============
+        if (positions.state == STATE_NO_POSITION)
+        {
+            DebugLogFile("NO_POSITION", "No positions open - evaluating new position");
+
+            // Check BUY conditions using PACKAGE values
+            if (direction == "BULLISH" && confidence >= buyThreshold)
+            {
+                DebugLogFile("BUY_CONDITION_MET",
+                             StringFormat("✅ BUY condition met using PACKAGE values: Dir=%s, Conf=%.1f%% >= %.1f%%",
+                                          direction, confidence, buyThreshold));
+
+                if (!CheckCooldown(symbolIndex, true))
+                {
+                    DebugLogFile("BUY_COOLDOWN", "❌ Buy blocked by cooldown");
+                    return ACTION_HOLD;
+                }
+
+                if (!CheckPositionLimits(symbolIndex, true))
+                {
+                    DebugLogFile("BUY_LIMITS", "❌ Buy position limits reached");
+                    return ACTION_HOLD;
+                }
+
+                DebugLogFile("DECISION_FINAL", "🎯 Trend decision: OPEN_BUY (respecting package)");
+                return ACTION_OPEN_BUY;
+            }
+
+            // Check SELL conditions using PACKAGE values
+            if (direction == "BEARISH" && confidence >= sellThreshold)
+            {
+                DebugLogFile("SELL_CONDITION_MET",
+                             StringFormat("✅ SELL condition met using PACKAGE values: Dir=%s, Conf=%.1f%% >= %.1f%%",
+                                          direction, confidence, sellThreshold));
+
+                if (!CheckCooldown(symbolIndex, false))
+                {
+                    DebugLogFile("SELL_COOLDOWN", "❌ Sell blocked by cooldown");
+                    return ACTION_HOLD;
+                }
+
+                if (!CheckPositionLimits(symbolIndex, false))
+                {
+                    DebugLogFile("SELL_LIMITS", "❌ Sell position limits reached");
+                    return ACTION_HOLD;
+                }
+
+                DebugLogFile("DECISION_FINAL", "🎯 Trend decision: OPEN_SELL (respecting package)");
+                return ACTION_OPEN_SELL;
+            }
+
+            DebugLogFile("NO_ENTRY", StringFormat("⏸️ No entry conditions met | Dir=%s, Conf=%.1f%%, BuyThresh=%.1f%%, SellThresh=%.1f%%",
+                                                  direction, confidence, buyThreshold, sellThreshold));
+            return ACTION_HOLD;
+        }
+
+        // ============ STEP 6: HANDLE EXISTING POSITIONS ============
+        DebugLogFile("EXISTING_POSITIONS", StringFormat("Existing positions: %s", positions.ToString()));
+
+        // Apply position management using PACKAGE values
+        return DecideWithPositionTrend(symbolIndex, package, positions, params, direction, confidence, currentMarket);
+    }
+
+    //+------------------------------------------------------------------+
+    //| Make range decision respecting package                          |
+    //+------------------------------------------------------------------+
+    DECISION_ACTION MakeRangeDecision(int symbolIndex, DecisionEngineInterface &package,
+                                      PositionAnalysis &positions)
+    {
+        DebugLogFile("MAKE_RANGE_DECISION", "=====================================");
+        DebugLogFile("MAKE_RANGE_DECISION", StringFormat("=== MAKING RANGE DECISION (RESPECTING PACKAGE) === | Symbol: %s",
+                                                         m_symbolStates[symbolIndex].symbol));
+
+        if (symbolIndex < 0 || symbolIndex >= m_totalSymbols)
+        {
+            DebugLogFile("ERROR", "❌ Invalid symbol index");
+            return ACTION_NONE;
+        }
+
+        string symbol = m_symbolStates[symbolIndex].symbol;
+
+        // ============ STEP 1: GET CURRENT MARKET FOR MONITORING ============
+        DebugLogFile("MARKET_MONITOR", "--- Getting current market (MONITORING ONLY) ---");
+        MarketAnalysis currentMarket = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
+
+        // PURE MONITORING - no rejection
+        bool marketIsRanging = currentMarket.IsRanging();
+        string marketState = currentMarket.GetRootStateString(currentMarket.rootState);
+
+        DebugLogFile("MARKET_MONITOR_INFO",
+                     StringFormat("Current Market: %s | State: %s | Conf: %.0f%% | IsRanging: %s",
+                                  marketState,
+                                  currentMarket.GetStateString(currentMarket.state),
+                                  currentMarket.confidence,
+                                  marketIsRanging ? "YES" : "NO"));
+
+        // ============ STEP 2: USE PACKAGE VALUES FOR DECISION MAKING ============
+        DebugLogFile("PACKAGE_RESPECT", "--- RESPECTING PACKAGE VALUES ---");
+
+        // Use package values EXACTLY as provided
+        double confidence = package.overallConfidence; // NO adjustments
+        string direction = package.dominantDirection;  // NO overrides
+        string packageRegime = package.marketRegime;   // Package's own regime
+
+        DebugLogFile("PACKAGE_VALUES",
+                     StringFormat("Package: Regime=%s, Dir=%s, Conf=%.1f%%, Type=%s, Action=%s, Trap=%.1f%%",
+                                  packageRegime, direction, confidence, package.packageType,
+                                  package.recommendedAction, package.trapProbability));
+
+        // ============ STEP 3: SET THRESHOLDS BASED ON PACKAGE REGIME ============
+        DebugLogFile("THRESHOLDS", "--- Setting thresholds based on PACKAGE regime ---");
+        DecisionParams params = m_symbolStates[symbolIndex].params;
+
+        // Use package regime to determine thresholds (respects package intent)
+        double buyThreshold = params.GetBuyThreshold(packageRegime);   // Uses packageRegime
+        double sellThreshold = params.GetSellThreshold(packageRegime); // Uses packageRegime
+
+        DebugLogFile("THRESHOLD_INFO",
+                     StringFormat("Using thresholds for PackageRegime=%s: Buy=%.1f%%, Sell=%.1f%%",
+                                  packageRegime, buyThreshold, sellThreshold));
+
+        // ============ STEP 4: MONITOR CONTEXT (NO ADJUSTMENTS) ============
+        DebugLogFile("CONTEXT_MONITOR", "--- Monitoring context (NO adjustments) ---");
+
+        // Monitor if package regime matches current market
+        bool contextMatch = false;
+        string contextNote = "";
+
+        if ((StringFind(packageRegime, "RANGING") >= 0 || package.packageType == "RANGE") && marketIsRanging)
+        {
+            contextMatch = true;
+            contextNote = "Optimal: Range package in ranging market";
+            DebugLogFile("CONTEXT_MONITOR", "✅ MONITOR: Optimal context");
+        }
+        else if ((StringFind(packageRegime, "RANGING") >= 0 || package.packageType == "RANGE") && !marketIsRanging)
+        {
+            contextMatch = false;
+            contextNote = StringFormat("Monitor: Range package in %s market (continuing anyway)", marketState);
+            DebugLogFile("CONTEXT_MONITOR", StringFormat("⚠️ MONITOR: %s", contextNote));
+        }
+
+        // Store monitoring info (NO adjustments to package)
+        string originalExtraInfo = package.extraInfo3;
+        package.extraInfo3 = StringFormat("%s|Monitor:CurrMarket=%s|ContextMatch=%s",
+                                          originalExtraInfo, marketState, contextMatch ? "YES" : "NO");
+
+        // ============ STEP 5: HANDLE NO POSITION CASE ============
+        if (positions.state == STATE_NO_POSITION)
+        {
+            DebugLogFile("NO_POSITION", "No positions open - evaluating new position");
+
+            // Simple check: Use package values directly
+            if (direction == "BULLISH" && confidence >= buyThreshold)
+            {
+                DebugLogFile("BUY_CONDITION_MET",
+                             StringFormat("✅ RANGE BUY condition met using PACKAGE values: Dir=%s, Conf=%.1f%% >= %.1f%%",
+                                          direction, confidence, buyThreshold));
+
+                if (!CheckCooldown(symbolIndex, true))
+                {
+                    DebugLogFile("BUY_COOLDOWN", "❌ Buy blocked by cooldown");
+                    return ACTION_HOLD;
+                }
+
+                if (!CheckPositionLimits(symbolIndex, true))
+                {
+                    DebugLogFile("BUY_LIMITS", "❌ Buy position limits reached");
+                    return ACTION_HOLD;
+                }
+
+                DebugLogFile("DECISION_FINAL", "🎯 Range decision: OPEN_BUY (respecting package)");
+                return ACTION_OPEN_BUY;
+            }
+
+            if (direction == "BEARISH" && confidence >= sellThreshold)
+            {
+                DebugLogFile("SELL_CONDITION_MET",
+                             StringFormat("✅ RANGE SELL condition met using PACKAGE values: Dir=%s, Conf=%.1f%% >= %.1f%%",
+                                          direction, confidence, sellThreshold));
+
+                if (!CheckCooldown(symbolIndex, false))
+                {
+                    DebugLogFile("SELL_COOLDOWN", "❌ Sell blocked by cooldown");
+                    return ACTION_HOLD;
+                }
+
+                if (!CheckPositionLimits(symbolIndex, false))
+                {
+                    DebugLogFile("SELL_LIMITS", "❌ Sell position limits reached");
+                    return ACTION_HOLD;
+                }
+
+                DebugLogFile("DECISION_FINAL", "🎯 Range decision: OPEN_SELL (respecting package)");
+                return ACTION_OPEN_SELL;
+            }
+
+            DebugLogFile("NO_ENTRY", StringFormat("⏸️ No entry conditions met | Dir=%s, Conf=%.1f%%, BuyThresh=%.1f%%, SellThresh=%.1f%%",
+                                                  direction, confidence, buyThreshold, sellThreshold));
+            return ACTION_HOLD;
+        }
+
+        // ============ STEP 6: HANDLE EXISTING POSITIONS ============
+        DebugLogFile("EXISTING_POSITIONS", StringFormat("Existing positions: %s", positions.ToString()));
+
+        // Apply position management using PACKAGE values
+        return DecideWithPositionRange(symbolIndex, package, positions, params, direction, confidence, currentMarket);
+    }
+
+    DECISION_ACTION DecideWithPositionTrend(int symbolIndex, const DecisionEngineInterface &source,
+                                            PositionAnalysis &positions, DecisionParams &params,
+                                            string direction, double confidence, const MarketAnalysis &currentMarket)
+    {
+        DebugLogFile("DECIDE_TREND_WITH_POSITION", "--- Making trend decision with signal context ---");
+
+        // LOG SIGNAL CONTEXT (simplified - no TradeSignal fields)
+        DebugLogFile("TREND_SIGNAL_CONTEXT", StringFormat("Signal Direction: %s | Confidence: %.1f%% | Market: %s",
+                                                          direction, confidence,
+                                                          currentMarket.GetStateString(currentMarket.state)));
+
+        // Use params for thresholds
+        double closeThreshold = params.closePositionThreshold;
+        double emergencyThreshold = params.closeAllThreshold;
+
+        // SIMPLE POSITION CHECKING
+        DebugLogFile("TREND_POSITION_STATE",
+                     StringFormat("Positions: %s | Signal: %s (%.1f%%)",
+                                  GetPositionStateString(positions.state),
+                                  direction, confidence));
+
+        // Check for emergency close based on confidence
+        if (confidence < emergencyThreshold)
+        {
+            DebugLogFile("TREND_EMERGENCY_CLOSE",
+                         StringFormat("Confidence %.1f%% < %.1f%%", confidence, emergencyThreshold));
+            return ACTION_CLOSE_ALL;
+        }
+
+        // NORMAL CLOSING LOGIC
+        if (confidence > closeThreshold)
+        {
+            if (positions.state == STATE_HAS_BUY && direction == "BEARISH")
+            {
+                DebugLogFile("TREND_CLOSE_BUY",
+                             StringFormat("Closing BUY | Signal confidence %.1f%% > threshold %.1f%%",
+                                          confidence, closeThreshold));
+                return ACTION_CLOSE_BUY;
+            }
+
+            if (positions.state == STATE_HAS_SELL && direction == "BULLISH")
+            {
+                DebugLogFile("TREND_CLOSE_SELL",
+                             StringFormat("Closing SELL | Signal confidence %.1f%% > threshold %.1f%%",
+                                          confidence, closeThreshold));
+                return ACTION_CLOSE_SELL;
+            }
+        }
+
+        // If positions are aligned with signal, HOLD
+        if ((positions.state == STATE_HAS_BUY && direction == "BULLISH") ||
+            (positions.state == STATE_HAS_SELL && direction == "BEARISH"))
+        {
+            DebugLogFile("TREND_HOLD_ALIGNED", "Positions aligned with signal - holding");
+            return ACTION_HOLD;
+        }
+
+        DebugLogFile("TREND_HOLD_NO_CLEAR", "No clear action - holding");
+        return ACTION_HOLD;
+    }
+
+    DECISION_ACTION DecideWithPositionRange(int symbolIndex, const DecisionEngineInterface &source,
+                                            PositionAnalysis &positions, DecisionParams &params,
+                                            string direction, double confidence, const MarketAnalysis &currentMarket)
+    {
+        DebugLogFile("DECIDE_RANGE_WITH_POSITION", "--- Making range decision with signal context ---");
+
+        // LOG SIGNAL CONTEXT
+        DebugLogFile("RANGE_SIGNAL_CONTEXT",
+                     StringFormat("Range Signal: %s (%.1f%%) | Market: %s",
+                                  direction, confidence,
+                                  currentMarket.GetStateString(currentMarket.state)));
+
+        // Higher threshold for range trading
+        double rangeCloseThreshold = params.closePositionThreshold + 7.0;
+
+        // Check position state
+        if (positions.state == STATE_HAS_BUY && direction == "BEARISH" && confidence > rangeCloseThreshold)
+        {
+            DebugLogFile("RANGE_CLOSE_BUY",
+                         StringFormat("Closing BUY in range market | Confidence %.1f%% > threshold %.1f%%",
+                                      confidence, rangeCloseThreshold));
+            return ACTION_CLOSE_BUY;
+        }
+
+        if (positions.state == STATE_HAS_SELL && direction == "BULLISH" && confidence > rangeCloseThreshold)
+        {
+            DebugLogFile("RANGE_CLOSE_SELL",
+                         StringFormat("Closing SELL in range market | Confidence %.1f%% > threshold %.1f%%",
+                                      confidence, rangeCloseThreshold));
+            return ACTION_CLOSE_SELL;
+        }
+
+        // Check for close all
+        if (confidence < params.closeAllThreshold)
+        {
+            DebugLogFile("RANGE_CLOSE_ALL",
+                         StringFormat("Low confidence %.1f%% < %.1f%% - closing all",
+                                      confidence, params.closeAllThreshold));
+            return ACTION_CLOSE_ALL;
+        }
+
+        DebugLogFile("RANGE_HOLD", "No clear range action - holding");
+        return ACTION_HOLD;
+    }
+
+    string GetPositionStateString(POSITION_STATE state) const
+    {
+        switch (state)
+        {
+        case STATE_NO_POSITION:
+            return "NO_POSITION";
+        case STATE_HAS_BUY:
+            return "HAS_BUY";
+        case STATE_HAS_SELL:
+            return "HAS_SELL";
+        case STATE_HAS_BOTH:
+            return "HAS_BOTH";
+        default:
+            return "UNKNOWN";
+        }
     }
 
     // ================= SETTERS =================
@@ -2216,13 +2578,13 @@ private:
             // Adjust thresholds for trend following
             if (regime.direction == "Bullish")
             {
-                params.buyConfidenceThreshold = MathMax(55.0, baseParams.trendBuyThreshold - 1.0);
-                params.sellConfidenceThreshold = MathMax(70.0, baseParams.trendSellThreshold + 5.0);
+                params.buyConfidenceThreshold = MathMax(55.0, baseParams.trendBuyThreshold);
+                params.sellConfidenceThreshold = MathMax(60.0, baseParams.trendSellThreshold);
             }
             else if (regime.direction == "Bearish")
             {
-                params.buyConfidenceThreshold = MathMax(60.0, baseParams.trendBuyThreshold + 5.0);
-                params.sellConfidenceThreshold = MathMax(55.0, baseParams.trendSellThreshold - 1.0);
+                params.buyConfidenceThreshold = MathMax(60.0, baseParams.trendBuyThreshold);
+                params.sellConfidenceThreshold = MathMax(60.0, baseParams.trendSellThreshold);
             }
 
             // Risk management for trends
@@ -2243,8 +2605,8 @@ private:
             params.maxPositionsPerSymbol = MathMax(1, baseParams.maxPositionsPerSymbol - 1); // Fewer positions
 
             // Higher thresholds for range trading
-            params.buyConfidenceThreshold = MathMax(70.0, baseParams.rangeBuyThreshold);
-            params.sellConfidenceThreshold = MathMax(70.0, baseParams.rangeSellThreshold);
+            params.buyConfidenceThreshold = MathMax(60.0, baseParams.rangeBuyThreshold);
+            params.sellConfidenceThreshold = MathMax(60.0, baseParams.rangeSellThreshold);
 
             // More conservative in ranges
             params.minRiskRewardRatio = MathMax(1.0, baseParams.minRiskRewardRatio - 0.5);
@@ -2521,780 +2883,6 @@ private:
             return "RANGING";
 
         return packageRegime;
-    }
-
-    // ================= ENHANCED TREND DECISION WITH LIFECYCLE =================
-    DECISION_ACTION MakeTrendDecision(int symbolIndex, const DecisionEngineInterface &package, PositionAnalysis &positions)
-    {
-        DebugLogFile("MAKE_TREND_DECISION", "=====================================");
-        DebugLogFile("MAKE_TREND_DECISION", StringFormat("=== MAKING TREND DECISION === | Symbol: %s | Index: %d",
-                                                         m_symbolStates[symbolIndex].symbol, symbolIndex));
-
-        if (symbolIndex < 0 || symbolIndex >= m_totalSymbols)
-        {
-            DebugLogFile("ERROR", "❌ Invalid symbol index");
-            return ACTION_NONE;
-        }
-
-        string symbol = m_symbolStates[symbolIndex].symbol;
-
-        // ============ STEP 1: GET MARKET REGIME ANALYSIS ============
-        DebugLogFile("TREND_REGIME_ANALYSIS", "--- Getting market regime analysis ---");
-        MarketAnalysis regimeAnalysis = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
-
-        DebugLogFile("TREND_REGIME_DETAILS", StringFormat("Trend Analysis: %s", regimeAnalysis.ToString()));
-
-        // Validate we're actually in a trending market
-        if (!regimeAnalysis.IsTrending())
-        {
-            DebugLogFile("TREND_VALIDATION_FAILED",
-                         StringFormat("❌ Not in trending market! RootState: %s, MarketState: %s",
-                                      regimeAnalysis.GetRootStateString(regimeAnalysis.rootState),
-                                      regimeAnalysis.GetStateString(regimeAnalysis.state)));
-
-            if (regimeAnalysis.IsRanging() && regimeAnalysis.state == STATE_CONTRACTION)
-            {
-                DebugLogFile("CONTRACTION_WARNING", "⚠️ Market in contraction - might be preparing for trend");
-            }
-
-            return ACTION_HOLD;
-        }
-
-        // ============ STEP 2: SET DYNAMIC THRESHOLDS BASED ON MARKET STATE ============
-        DebugLogFile("TREND_THRESHOLDS", "--- Setting dynamic thresholds ---");
-        DecisionParams params = m_symbolStates[symbolIndex].params;
-
-        double baseBuyThreshold = params.trendBuyThreshold;
-        double baseSellThreshold = params.trendSellThreshold;
-
-        DebugLogFile("TREND_BASE_THRESHOLDS", StringFormat("Base thresholds - Buy: %.1f%%, Sell: %.1f%%",
-                                                           baseBuyThreshold, baseSellThreshold));
-
-        // ============ STEP 3: APPLY MARKET STATE ADJUSTMENTS ============
-        DebugLogFile("TREND_STATE_ADJUSTMENTS", "--- Applying market state adjustments ---");
-
-        double stateMultiplier = 1.0;
-        string adjustmentReason = "No state adjustment";
-
-        switch (regimeAnalysis.state)
-        {
-        case STATE_TRENDING_LOW_VOL:
-            stateMultiplier = 1.0; // 0.85; // More aggressive in healthy trends
-            adjustmentReason = "Healthy low-volatility trend - 15% more aggressive";
-            DebugLogFile("TREND_STATE_ADJ", "✅ HEALTHY TREND: Using 15% more aggressive thresholds");
-            break;
-
-        case STATE_TRENDING_HIGH_VOL:
-            stateMultiplier = 1.0; // 1.25; // More conservative in exhaustion
-            adjustmentReason = "High-volatility/Exhaustion trend - 25% more conservative";
-            DebugLogFile("TREND_STATE_ADJ", "⚠️ EXHAUSTION TREND: Using 25% more conservative thresholds");
-            break;
-
-        case STATE_EXPANSION:
-            stateMultiplier = 1.0; // 0.8; // Very aggressive in expansions
-            adjustmentReason = "Trend expansion/breakout - 20% more aggressive";
-            DebugLogFile("TREND_STATE_ADJ", "🚀 EXPANSION: Using 20% more aggressive thresholds");
-            break;
-
-        case STATE_CONTRACTION:
-            stateMultiplier = 1.0; // 1.5; // Very conservative during contractions
-            adjustmentReason = "Contraction before trend - 50% more conservative";
-            DebugLogFile("TREND_STATE_ADJ", "⚡ CONTRACTION: Using 50% more conservative thresholds");
-            break;
-
-        default:
-            stateMultiplier = 1.0; // 1.0;
-            adjustmentReason = "Standard trending market";
-            DebugLogFile("TREND_STATE_ADJ", "📈 STANDARD TREND: Using normal thresholds");
-            break;
-        }
-
-        double adjustedBuyThreshold = baseBuyThreshold * stateMultiplier;
-        double adjustedSellThreshold = baseSellThreshold * stateMultiplier;
-
-        DebugLogFile("TREND_ADJUSTED_THRESHOLDS", StringFormat("Adjusted - Buy: %.1f%% (was %.1f%%), Sell: %.1f%% (was %.1f%%) | Reason: %s",
-                                                               adjustedBuyThreshold, baseBuyThreshold,
-                                                               adjustedSellThreshold, baseSellThreshold,
-                                                               adjustmentReason));
-
-        // ============ STEP 4: GET PACKAGE VALUES ============
-        DebugLogFile("TREND_PACKAGE_VALUES", "--- Analyzing package values ---");
-        double confidence = package.overallConfidence;
-        string direction = package.dominantDirection;
-
-        DebugLogFile("TREND_PACKAGE_INFO", StringFormat("Direction: %s, Confidence: %.1f%%, RegimeDirection: %s",
-                                                        direction, confidence, regimeAnalysis.direction));
-
-        // Check direction alignment with market regime
-        bool directionAligned = false;
-        bool shouldPreferPackage = false; // NEW: Flag to track if we should prefer package direction
-        string alignmentNote = "";        // NEW: Track alignment reason
-
-        if (regimeAnalysis.direction == "Bullish" && direction == "BULLISH")
-        {
-            directionAligned = true;
-            alignmentNote = "✅ BULLISH alignment: Package=BULLISH, Regime=Bullish";
-        }
-        else if (regimeAnalysis.direction == "Bearish" && direction == "BEARISH")
-        {
-            directionAligned = true;
-            alignmentNote = "✅ BEARISH alignment: Package=BEARISH, Regime=Bearish";
-        }
-        else
-        {
-            // CONTRADICTION DETECTED - prefer trend package direction
-            if (regimeAnalysis.IsTrending())
-            {
-                // In trending markets, PREFER TREND PACKAGE over regime
-                shouldPreferPackage = true;
-
-                if (direction == "BULLISH")
-                {
-                    alignmentNote = "⚠️ CONTRADICTION - Preferring TREND PACKAGE BULLISH (Regime suggests: " +
-                                    regimeAnalysis.direction + ")";
-                    directionAligned = true; // Override: accept package direction
-                }
-                else if (direction == "BEARISH")
-                {
-                    alignmentNote = "⚠️ CONTRADICTION - Preferring TREND PACKAGE BEARISH (Regime suggests: " +
-                                    regimeAnalysis.direction + ")";
-                    directionAligned = true; // Override: accept package direction
-                }
-            }
-            else
-            {
-                // In ranging or unknown markets, respect the contradiction
-                directionAligned = false;
-                alignmentNote = "❌ Direction mismatch: Package=" + direction +
-                                ", Regime=" + regimeAnalysis.direction +
-                                " (Not trending, respecting contradiction)";
-            }
-        }
-
-        DebugLogFile("DIRECTION_ALIGNMENT", alignmentNote);
-
-        // ============ STEP 5: HANDLE NO POSITION CASE ============
-        if (positions.state == STATE_NO_POSITION)
-        {
-            DebugLogFile("TREND_NO_POSITION", "No positions open - evaluating new trend position");
-
-            // Check for adverse conditions
-            if (regimeAnalysis.state == STATE_TRENDING_HIGH_VOL && package.trapProbability > 60)
-            {
-                DebugLogFile("TREND_EXHAUSTION_WARNING",
-                             StringFormat("⚠️ High trap probability (%.1f%%) during exhaustion - avoiding entry",
-                                          package.trapProbability));
-                return ACTION_HOLD;
-            }
-
-            // Check BUY conditions
-            if (direction == "BULLISH" && confidence >= adjustedBuyThreshold)
-            {
-                if (!directionAligned)
-                {
-                    DebugLogFile("TREND_DIRECTION_MISMATCH",
-                                 StringFormat("⚠️ Package bullish but regime direction: %s", regimeAnalysis.direction));
-                    return ACTION_HOLD;
-                }
-
-                DebugLogFile("TREND_BUY_CONDITION_MET",
-                             StringFormat("✅ TREND BUY condition met: Dir=%s, Conf=%.1f%% >= %.1f%%, RegimeDir=%s",
-                                          direction, confidence, adjustedBuyThreshold, regimeAnalysis.direction));
-
-                if (!CheckCooldown(symbolIndex, true))
-                {
-                    DebugLogFile("TREND_BUY_COOLDOWN", "❌ Trend buy blocked by cooldown");
-                    return ACTION_HOLD;
-                }
-
-                if (!CheckPositionLimits(symbolIndex, true))
-                {
-                    DebugLogFile("TREND_BUY_LIMITS", "❌ Trend buy position limits reached");
-                    return ACTION_HOLD;
-                }
-
-                // Apply regime-based position size
-                ApplyRegimePositionSize(symbolIndex, regimeAnalysis, true);
-
-                DebugLogFile("TREND_DECISION_FINAL", "🎯 Trend decision: OPEN_BUY");
-                return ACTION_OPEN_BUY;
-            }
-
-            // Check SELL conditions
-            if (direction == "BEARISH" && confidence >= adjustedSellThreshold)
-            {
-                if (!directionAligned)
-                {
-                    DebugLogFile("TREND_DIRECTION_MISMATCH",
-                                 StringFormat("⚠️ Package bearish but regime direction: %s", regimeAnalysis.direction));
-                    return ACTION_HOLD;
-                }
-
-                DebugLogFile("TREND_SELL_CONDITION_MET",
-                             StringFormat("✅ TREND SELL condition met: Dir=%s, Conf=%.1f%% >= %.1f%%, RegimeDir=%s",
-                                          direction, confidence, adjustedSellThreshold, regimeAnalysis.direction));
-
-                if (!CheckCooldown(symbolIndex, false))
-                {
-                    DebugLogFile("TREND_SELL_COOLDOWN", "❌ Trend sell blocked by cooldown");
-                    return ACTION_HOLD;
-                }
-
-                if (!CheckPositionLimits(symbolIndex, false))
-                {
-                    DebugLogFile("TREND_SELL_LIMITS", "❌ Trend sell position limits reached");
-                    return ACTION_HOLD;
-                }
-
-                // Apply regime-based position size
-                ApplyRegimePositionSize(symbolIndex, regimeAnalysis, false);
-
-                DebugLogFile("TREND_DECISION_FINAL", "🎯 Trend decision: OPEN_SELL");
-                return ACTION_OPEN_SELL;
-            }
-
-            DebugLogFile("TREND_NO_ENTRY", "⏸️ No trend entry conditions met");
-            return ACTION_HOLD;
-        }
-
-        // ============ STEP 6: HANDLE EXISTING POSITIONS ============
-        DebugLogFile("TREND_EXISTING_POSITIONS", StringFormat("Existing positions: %s", positions.ToString()));
-
-        // Apply market state-based position management
-        return DecideWithPositionTrend(symbolIndex, package, positions, params, direction, confidence, regimeAnalysis);
-    }
-
-    // ================= ENHANCED RANGE DECISION WITH LIFECYCLE =================
-    DECISION_ACTION MakeRangeDecision(int symbolIndex, const DecisionEngineInterface &package, PositionAnalysis &positions)
-    {
-        DebugLogFile("MAKE_RANGE_DECISION", "=====================================");
-        DebugLogFile("MAKE_RANGE_DECISION", StringFormat("=== MAKING RANGE DECISION === | Symbol: %s | Index: %d",
-                                                         m_symbolStates[symbolIndex].symbol, symbolIndex));
-
-        if (symbolIndex < 0 || symbolIndex >= m_totalSymbols)
-        {
-            DebugLogFile("ERROR", "❌ Invalid symbol index");
-            return ACTION_NONE;
-        }
-
-        string symbol = m_symbolStates[symbolIndex].symbol;
-
-        // ============ STEP 1: GET MARKET REGIME ANALYSIS ============
-        DebugLogFile("RANGE_REGIME_ANALYSIS", "--- Getting market regime analysis ---");
-        MarketAnalysis regimeAnalysis = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
-
-        DebugLogFile("RANGE_REGIME_DETAILS", StringFormat("Range Analysis: %s", regimeAnalysis.ToString()));
-
-        // Validate we're actually in a ranging market
-        if (!regimeAnalysis.IsRanging())
-        {
-            DebugLogFile("RANGE_VALIDATION_FAILED",
-                         StringFormat("❌ Not in ranging market! RootState: %s, MarketState: %s",
-                                      regimeAnalysis.GetRootStateString(regimeAnalysis.rootState),
-                                      regimeAnalysis.GetStateString(regimeAnalysis.state)));
-
-            // Special case: Contraction might be preparing for range
-            if (regimeAnalysis.state == STATE_CONTRACTION)
-            {
-                DebugLogFile("CONTRACTION_SPECIAL", "⚡ Market in contraction - might be preparing for range formation");
-            }
-            else
-            {
-                return ACTION_HOLD;
-            }
-        }
-
-        // ============ STEP 2: SET DYNAMIC THRESHOLDS BASED ON MARKET STATE ============
-        DebugLogFile("RANGE_THRESHOLDS", "--- Setting dynamic thresholds ---");
-        DecisionParams params = m_symbolStates[symbolIndex].params;
-
-        double baseBuyThreshold = params.rangeBuyThreshold;
-        double baseSellThreshold = params.rangeSellThreshold;
-
-        DebugLogFile("RANGE_BASE_THRESHOLDS", StringFormat("Base range thresholds - Buy: %.1f%%, Sell: %.1f%%",
-                                                           baseBuyThreshold, baseSellThreshold));
-
-        // ============ STEP 3: APPLY MARKET STATE ADJUSTMENTS ============
-        DebugLogFile("RANGE_STATE_ADJUSTMENTS", "--- Applying market state adjustments ---");
-
-        double stateMultiplier = 1.0;
-        string adjustmentReason = "No state adjustment";
-
-        switch (regimeAnalysis.state)
-        {
-        case STATE_RANGING_LOW_VOL:
-            stateMultiplier = 1.0; // 0.9; // More aggressive in stable ranges
-            adjustmentReason = "Low-volatility range - 10% more aggressive";
-            DebugLogFile("RANGE_STATE_ADJ", "📊 LOW VOL RANGE: Using 10% more aggressive thresholds");
-            break;
-
-        case STATE_RANGING_HIGH_VOL:
-            stateMultiplier = 1.0; // 1.3; // More conservative in volatile ranges
-            adjustmentReason = "High-volatility range - 30% more conservative";
-            DebugLogFile("RANGE_STATE_ADJ", "⚠️ HIGH VOL RANGE: Using 30% more conservative thresholds");
-            break;
-
-        case STATE_CONTRACTION:
-            stateMultiplier = 1.0; // 1.5; // Very conservative during contractions
-            adjustmentReason = "Range contraction/squeeze - 50% more conservative";
-            DebugLogFile("RANGE_STATE_ADJ", "⚡ CONTRACTION: Using 50% more conservative thresholds");
-            break;
-
-        case STATE_CHURN:
-            stateMultiplier = 1.0; // 2.0; // Extremely conservative during churn
-            adjustmentReason = "Market churn/exhaustion - 100% more conservative";
-            DebugLogFile("RANGE_STATE_ADJ", "🌀 CHURN: Using 100% more conservative thresholds");
-            break;
-
-        case STATE_EXPANSION:
-            stateMultiplier = 1.0; // 0.8; // More aggressive during expansions
-            adjustmentReason = "Range expansion - 20% more aggressive";
-            DebugLogFile("RANGE_STATE_ADJ", "🚀 EXPANSION: Using 20% more aggressive thresholds");
-            break;
-
-        default:
-            stateMultiplier = 1.0; // 1.0;
-            adjustmentReason = "Standard ranging market";
-            DebugLogFile("RANGE_STATE_ADJ", "📊 STANDARD RANGE: Using normal thresholds");
-            break;
-        }
-
-        double adjustedBuyThreshold = baseBuyThreshold * stateMultiplier;
-        double adjustedSellThreshold = baseSellThreshold * stateMultiplier;
-
-        DebugLogFile("RANGE_ADJUSTED_THRESHOLDS", StringFormat("Adjusted - Buy: %.1f%% (was %.1f%%), Sell: %.1f%% (was %.1f%%) | Reason: %s",
-                                                               adjustedBuyThreshold, baseBuyThreshold,
-                                                               adjustedSellThreshold, baseSellThreshold,
-                                                               adjustmentReason));
-
-        // ============ STEP 4: GET PACKAGE VALUES ============
-        DebugLogFile("RANGE_PACKAGE_VALUES", "--- Analyzing package values ---");
-        double confidence = package.overallConfidence;
-        string direction = package.dominantDirection;
-        string action = package.recommendedAction;
-
-        DebugLogFile("RANGE_PACKAGE_INFO", StringFormat("Direction: %s, Confidence: %.1f%%, Action: %s, Trap: %.1f%%, Avoid: %s",
-                                                        direction, confidence, action,
-                                                        package.trapProbability, package.ShouldAvoid() ? "YES" : "NO"));
-
-        // ============ STEP 5: CHECK MARKET STATE WARNINGS ============
-        DebugLogFile("RANGE_STATE_WARNINGS", "--- Checking market state warnings ---");
-
-        if (regimeAnalysis.state == STATE_RANGING_HIGH_VOL)
-        {
-            DebugLogFile("HIGH_VOL_WARNING", "⚠️ High volatility range - extreme caution required");
-            if (package.trapProbability > 55)
-            {
-                DebugLogFile("HIGH_VOL_TRAP_WARNING",
-                             StringFormat("❌ Trap probability %.1f%% too high for high-vol range",
-                                          package.trapProbability));
-                return ACTION_HOLD;
-            }
-        }
-
-        if (regimeAnalysis.state == STATE_CHURN)
-        {
-            DebugLogFile("CHURN_WARNING", "🌀 Market churn - avoiding all trades");
-            return ACTION_HOLD;
-        }
-
-        if (regimeAnalysis.state == STATE_CONTRACTION && confidence < 80)
-        {
-            DebugLogFile("CONTRACTION_WARNING", "⚡ Contraction phase - waiting for stronger signals");
-            return ACTION_HOLD;
-        }
-
-        // ============ STEP 6: CHECK FOR AVOID/FADE/WANT SIGNALS ============
-        DebugLogFile("RANGE_SIGNAL_CHECK", "--- Checking range signals ---");
-
-        if (package.ShouldAvoid() || action == "AVOID")
-        {
-            DebugLogFile("RANGE_AVOID_SIGNAL", "⚠️ Range package says AVOID - holding position");
-
-            // Special handling for contraction states
-            if (regimeAnalysis.state == STATE_CONTRACTION)
-            {
-                DebugLogFile("CONTRACTION_AVOID", "⚡ Contraction + Avoid signal = STRONG HOLD");
-            }
-
-            if (positions.state != STATE_NO_POSITION)
-            {
-                DebugLogFile("RANGE_CLOSE_ON_AVOID", "Closing positions due to AVOID signal");
-                return ACTION_CLOSE_ALL;
-            }
-
-            return ACTION_HOLD;
-        }
-
-        if (action == "FADE")
-        {
-            DebugLogFile("RANGE_FADE_SIGNAL", StringFormat("🎯 FADE signal: %s with %.1f%% confidence", direction, confidence));
-
-            // Check if market state supports fading
-            if (regimeAnalysis.state == STATE_RANGING_HIGH_VOL || regimeAnalysis.state == STATE_CHURN)
-            {
-                DebugLogFile("FADE_STATE_WARNING", StringFormat("⚠️ Fading not recommended in %s state",
-                                                                regimeAnalysis.GetStateString(regimeAnalysis.state)));
-                return ACTION_HOLD;
-            }
-
-            return HandleFadeSignal(symbolIndex, package, positions, adjustedBuyThreshold, adjustedSellThreshold);
-        }
-
-        if (action == "WAIT")
-        {
-            DebugLogFile("RANGE_WAIT_SIGNAL", "⏳ Range package says WAIT - holding");
-            return ACTION_HOLD;
-        }
-
-        // ============ STEP 7: HANDLE NO POSITION CASE ============
-        if (positions.state == STATE_NO_POSITION)
-        {
-            DebugLogFile("RANGE_NO_POSITION", "No positions open - evaluating range entry");
-
-            // Check for trap zones
-            if (package.trapProbability > 55)
-            {
-                DebugLogFile("RANGE_TRAP_WARNING",
-                             StringFormat("⚠️ High trap probability (%.1f%%) for range entry in %s state",
-                                          package.trapProbability, regimeAnalysis.GetStateString(regimeAnalysis.state)));
-
-                if (regimeAnalysis.state == STATE_RANGING_HIGH_VOL && package.trapProbability > 55)
-                {
-                    DebugLogFile("HIGH_VOL_TRAP_BLOCK", "❌ Blocked by high trap probability in high-vol range");
-                    return ACTION_HOLD;
-                }
-            }
-
-            // Check BUY conditions
-            if (direction == "BULLISH" && confidence >= adjustedBuyThreshold)
-            {
-                DebugLogFile("RANGE_BUY_CONDITION_MET",
-                             StringFormat("✅ RANGE BUY condition met: Dir=%s, Conf=%.1f%% >= %.1f%%, State=%s",
-                                          direction, confidence, adjustedBuyThreshold,
-                                          regimeAnalysis.GetStateString(regimeAnalysis.state)));
-
-                if (!CheckCooldown(symbolIndex, true))
-                {
-                    DebugLogFile("RANGE_BUY_COOLDOWN", "❌ Range buy blocked by cooldown");
-                    return ACTION_HOLD;
-                }
-
-                if (!CheckPositionLimits(symbolIndex, true))
-                {
-                    DebugLogFile("RANGE_BUY_LIMITS", "❌ Range buy position limits reached");
-                    return ACTION_HOLD;
-                }
-
-                // Apply regime-based position size (smaller for range trading)
-                ApplyRegimePositionSize(symbolIndex, regimeAnalysis, true);
-
-                DebugLogFile("RANGE_DECISION_FINAL", "🎯 Range decision: OPEN_BUY");
-                return ACTION_OPEN_BUY;
-            }
-
-            // Check SELL conditions
-            if (direction == "BEARISH" && confidence >= adjustedSellThreshold)
-            {
-                DebugLogFile("RANGE_SELL_CONDITION_MET",
-                             StringFormat("✅ RANGE SELL condition met: Dir=%s, Conf=%.1f%% >= %.1f%%, State=%s",
-                                          direction, confidence, adjustedSellThreshold,
-                                          regimeAnalysis.GetStateString(regimeAnalysis.state)));
-
-                if (!CheckCooldown(symbolIndex, false))
-                {
-                    DebugLogFile("RANGE_SELL_COOLDOWN", "❌ Range sell blocked by cooldown");
-                    return ACTION_HOLD;
-                }
-
-                if (!CheckPositionLimits(symbolIndex, false))
-                {
-                    DebugLogFile("RANGE_SELL_LIMITS", "❌ Range sell position limits reached");
-                    return ACTION_HOLD;
-                }
-
-                // Apply regime-based position size (smaller for range trading)
-                ApplyRegimePositionSize(symbolIndex, regimeAnalysis, false);
-
-                DebugLogFile("RANGE_DECISION_FINAL", "🎯 Range decision: OPEN_SELL");
-                return ACTION_OPEN_SELL;
-            }
-
-            DebugLogFile("RANGE_NO_ENTRY", "⏸️ No range entry conditions met");
-            return ACTION_HOLD;
-        }
-
-        // ============ STEP 8: HANDLE EXISTING POSITIONS ============
-        DebugLogFile("RANGE_EXISTING_POSITIONS", StringFormat("Existing positions: %s", positions.ToString()));
-
-        return DecideWithPositionRange(symbolIndex, package, positions, params, direction, confidence, regimeAnalysis);
-    }
-
-    // ================= SUPPORTING FUNCTIONS =================
-    DECISION_ACTION DecideWithPositionTrend(int symbolIndex, const DecisionEngineInterface &source,
-                                            PositionAnalysis &positions, DecisionParams &params,
-                                            string direction, double confidence, const MarketAnalysis &regimeAnalysis)
-    {
-        DebugLogFile("DECIDE_TREND_WITH_POSITION", "--- Making trend decision with existing positions ---");
-
-        double closeThreshold = params.closePositionThreshold;
-
-        DebugLogFile("TREND_CLOSE_THRESHOLD", StringFormat("Base close threshold: %.1f%% | Market State: %s",
-                                                           closeThreshold, MarketAnalysis::GetStateString(regimeAnalysis.state)));
-
-        // Adjust close threshold based on market state
-        if (regimeAnalysis.state == STATE_TRENDING_HIGH_VOL)
-        {
-            closeThreshold += 0.0;
-            DebugLogFile("TREND_WEAKENING_CLOSE", StringFormat("High volatility trend - increasing close threshold to %.1f%%", closeThreshold));
-        }
-        else if (regimeAnalysis.state == STATE_CONTRACTION)
-        {
-            closeThreshold += 0.0; // Be very conservative about closing during contractions
-            DebugLogFile("TREND_CONTRACTION_CLOSE", StringFormat("Contraction phase - increasing close threshold to %.1f%%", closeThreshold));
-        }
-        else if (regimeAnalysis.state == STATE_EXPANSION)
-        {
-            closeThreshold -= 0.0; // Be more aggressive about closing during expansions
-            DebugLogFile("TREND_EXPANSION_CLOSE", StringFormat("Expansion phase - decreasing close threshold to %.1f%%", closeThreshold));
-        }
-
-        if (confidence < params.closeAllThreshold)
-        {
-            DebugLogFile("TREND_EMERGENCY_CLOSE_ALL", StringFormat("Emergency close-all: Confidence %.1f%% < %.1f%%",
-                                                                   confidence, params.closeAllThreshold));
-            return ACTION_CLOSE_ALL;
-        }
-
-        if (confidence >= MathMax(params.buyConfidenceThreshold, params.sellConfidenceThreshold) * 1.2 &&
-            (regimeAnalysis.state == STATE_TRENDING_LOW_VOL || regimeAnalysis.state == STATE_EXPANSION))
-        {
-            DebugLogFile("TREND_ADD_TO_POSITION", StringFormat("High confidence %.1f%% in %s trend phase - checking to add",
-                                                               confidence, MarketAnalysis::GetStateString(regimeAnalysis.state)));
-            return DecideAdding(symbolIndex, source, positions, direction);
-        }
-
-        return DecideClosing(symbolIndex, source, positions, direction, closeThreshold);
-    }
-
-    DECISION_ACTION DecideWithPositionRange(int symbolIndex, const DecisionEngineInterface &source,
-                                            PositionAnalysis &positions, DecisionParams &params,
-                                            string direction, double confidence, const MarketAnalysis &regimeAnalysis)
-    {
-        DebugLogFile("DECIDE_RANGE_WITH_POSITION", "--- Making range decision with existing positions ---");
-
-        double rangeCloseThreshold = params.closePositionThreshold + 15.0;
-
-        DebugLogFile("RANGE_CLOSE_THRESHOLD", StringFormat("Range close threshold: %.1f%% (base: %.1f%%) | Market State: %s",
-                                                           rangeCloseThreshold, params.closePositionThreshold,
-                                                           MarketAnalysis::GetStateString(regimeAnalysis.state)));
-
-        // Adjust close threshold based on market state
-        if (regimeAnalysis.state == STATE_RANGING_HIGH_VOL || regimeAnalysis.state == STATE_CHURN)
-        {
-            rangeCloseThreshold += 0.0; // Be more aggressive in closing positions during high volatility/churn
-            DebugLogFile("RANGE_STATE_ADJUSTMENT", StringFormat("High volatility/churn state - increasing close threshold to %.1f%%", rangeCloseThreshold));
-        }
-        else if (regimeAnalysis.state == STATE_CONTRACTION)
-        {
-            rangeCloseThreshold -= 0.0; // Be more conservative during contractions
-            DebugLogFile("RANGE_STATE_ADJUSTMENT", StringFormat("Contraction state - decreasing close threshold to %.1f%%", rangeCloseThreshold));
-        }
-
-        if (confidence > rangeCloseThreshold)
-        {
-            if (positions.state == STATE_HAS_BUY && direction == "BEARISH")
-            {
-                DebugLogFile("RANGE_CLOSE_BUY", "🔻 Closing BUY in range (bearish signal)");
-                return ACTION_CLOSE_BUY;
-            }
-
-            if (positions.state == STATE_HAS_SELL && direction == "BULLISH")
-            {
-                DebugLogFile("RANGE_CLOSE_SELL", "🔺 Closing SELL in range (bullish signal)");
-                return ACTION_CLOSE_SELL;
-            }
-        }
-
-        // Be more aggressive about closing all during dangerous market states
-        double closeAllThreshold = params.closeAllThreshold;
-        if (regimeAnalysis.state == STATE_RANGING_HIGH_VOL || regimeAnalysis.state == STATE_CHURN)
-        {
-            closeAllThreshold += 0.0; // Close all positions sooner in dangerous states
-            DebugLogFile("RANGE_DANGEROUS_STATE", StringFormat("High vol/churn state - increasing close-all threshold to %.1f%%", closeAllThreshold));
-        }
-
-        if (confidence < closeAllThreshold)
-        {
-            DebugLogFile("RANGE_CLOSE_ALL", StringFormat("Low confidence %.1f%% in %s range - closing all",
-                                                         confidence, MarketAnalysis::GetStateString(regimeAnalysis.state)));
-            return ACTION_CLOSE_ALL;
-        }
-
-        DebugLogFile("RANGE_HOLD_POSITIONS", StringFormat("⏸️ Holding existing range positions | Market State: %s",
-                                                          MarketAnalysis::GetStateString(regimeAnalysis.state)));
-        return ACTION_HOLD;
-    }
-
-    DECISION_ACTION HandleFadeSignal(int symbolIndex, const DecisionEngineInterface &package,
-                                     PositionAnalysis &positions, double buyThreshold, double sellThreshold)
-    {
-        DebugLogFile("HANDLE_FADE_SIGNAL", "--- Handling FADE (counter-trend) signal ---");
-
-        string direction = package.dominantDirection;
-        double confidence = package.overallConfidence;
-        string fadeDirection = (direction == "BULLISH") ? "BEARISH" : "BULLISH";
-
-        DebugLogFile("FADE_LOGIC", StringFormat("Package Dir: %s → FADE Dir: %s | Conf: %.1f%%",
-                                                direction, fadeDirection, confidence));
-
-        if (positions.state == STATE_NO_POSITION)
-        {
-            if (fadeDirection == "BULLISH" && confidence >= buyThreshold)
-            {
-                DebugLogFile("FADE_BUY_SIGNAL", StringFormat("🎯 FADE BUY: Buying against bearish signal with %.1f%% confidence", confidence));
-
-                if (!CheckCooldown(symbolIndex, true) || !CheckPositionLimits(symbolIndex, true))
-                    return ACTION_HOLD;
-
-                return ACTION_OPEN_BUY;
-            }
-
-            if (fadeDirection == "BEARISH" && confidence >= sellThreshold)
-            {
-                DebugLogFile("FADE_SELL_SIGNAL", StringFormat("🎯 FADE SELL: Selling against bullish signal with %.1f%% confidence", confidence));
-
-                if (!CheckCooldown(symbolIndex, false) || !CheckPositionLimits(symbolIndex, false))
-                    return ACTION_HOLD;
-
-                return ACTION_OPEN_SELL;
-            }
-        }
-        else
-        {
-            if (positions.state == STATE_HAS_BUY && fadeDirection == "BEARISH")
-            {
-                DebugLogFile("FADE_CLOSE_BUY", "Closing BUY for FADE SELL signal");
-                return ACTION_CLOSE_BUY;
-            }
-
-            if (positions.state == STATE_HAS_SELL && fadeDirection == "BULLISH")
-            {
-                DebugLogFile("FADE_CLOSE_SELL", "Closing SELL for FADE BUY signal");
-                return ACTION_CLOSE_SELL;
-            }
-        }
-
-        return ACTION_HOLD;
-    }
-
-    DECISION_ACTION DecideAdding(int symbolIndex, const DecisionEngineInterface &source,
-                                 PositionAnalysis &positions, string direction)
-    {
-        DebugLogFile("DECIDE_ADDING", StringFormat("Evaluating adding to positions. Direction: %s, Positions: %s",
-                                                   direction, positions.ToString()));
-
-        if (direction == "BULLISH" && (positions.state == STATE_HAS_BUY || positions.state == STATE_HAS_BOTH))
-        {
-            DebugLogFile("ADD_BUY_CONSIDERED", "Considering adding to BUY position");
-
-            if (!CheckCooldown(symbolIndex, true))
-            {
-                DebugLogFile("ADD_BUY_COOLDOWN_BLOCKED", "❌ Adding BUY blocked by cooldown");
-                return ACTION_HOLD;
-            }
-
-            DebugLogFile("ADD_BUY_COOLDOWN_PASSED", "Buy cooldown check passed for adding");
-
-            if (!CheckPositionLimits(symbolIndex, true))
-            {
-                DebugLogFile("ADD_BUY_LIMITS_FAILED", "Position limits failed for adding BUY");
-                return ACTION_HOLD;
-            }
-
-            DebugLogFile("ADD_BUY_LIMITS_PASSED", "Position limits passed for adding BUY");
-            DebugLogFile("DECISION_FINAL", "Decision: OPEN_BUY (adding)");
-            return ACTION_OPEN_BUY;
-        }
-
-        if (direction == "BEARISH" && (positions.state == STATE_HAS_SELL || positions.state == STATE_HAS_BOTH))
-        {
-            DebugLogFile("ADD_SELL_CONSIDERED", "Considering adding to SELL position");
-
-            if (!CheckCooldown(symbolIndex, false))
-            {
-                DebugLogFile("ADD_SELL_COOLDOWN_BLOCKED", "❌ Adding SELL blocked by cooldown");
-                return ACTION_HOLD;
-            }
-
-            DebugLogFile("ADD_SELL_COOLDOWN_PASSED", "Sell cooldown check passed for adding");
-
-            if (!CheckPositionLimits(symbolIndex, false))
-            {
-                DebugLogFile("ADD_SELL_LIMITS_FAILED", "Position limits failed for adding SELL");
-                return ACTION_HOLD;
-            }
-
-            DebugLogFile("ADD_SELL_LIMITS_PASSED", "Position limits passed for adding SELL");
-            DebugLogFile("DECISION_FINAL", "Decision: OPEN_SELL (adding)");
-            return ACTION_OPEN_SELL;
-        }
-
-        DebugLogFile("DECISION_FINAL", "No adding conditions met, Decision: HOLD");
-        return ACTION_HOLD;
-    }
-
-    DECISION_ACTION DecideClosing(int symbolIndex, const DecisionEngineInterface &source,
-                                  PositionAnalysis &positions, string direction, double closeThreshold = 40.0)
-    {
-        DebugLogFile("DECIDE_CLOSING_START", StringFormat("Evaluating closing positions. Direction: %s, Positions: %s",
-                                                          direction, positions.ToString()));
-
-        double confidence = source.overallConfidence;
-
-        DebugLogFile("CLOSING_LOGIC", StringFormat("Using fixed close threshold: %.1f%% (Position profit: %.2f)",
-                                                   closeThreshold, positions.totalProfit));
-
-        DebugLogFile("CLOSING_THRESHOLD", StringFormat("Conf: %.1f%%, CloseThreshold: %.1f%%, Profit: $%.2f, Dir: %s",
-                                                       confidence, closeThreshold, positions.totalProfit, direction));
-
-        if (confidence < closeThreshold)
-        {
-            DebugLogFile("CLOSING_DECISION", "❌ Confidence below threshold - HOLD (no close)");
-            return ACTION_HOLD;
-        }
-
-        DebugLogFile("CLOSING_DECISION", "✅ Signal strong enough for closing consideration");
-
-        if (positions.state == STATE_HAS_BUY && direction == "BEARISH")
-        {
-            DebugLogFile("CLOSE_BUY_SIGNAL", "🔻 Closing BUY (strong BEARISH signal)");
-            return ACTION_CLOSE_BUY;
-        }
-
-        if (positions.state == STATE_HAS_SELL && direction == "BULLISH")
-        {
-            DebugLogFile("CLOSE_SELL_SIGNAL", "🔺 Closing SELL (strong BULLISH signal)");
-            return ACTION_CLOSE_SELL;
-        }
-
-        if (positions.state == STATE_HAS_BOTH)
-        {
-            DebugLogFile("CLOSE_BOTH_POSITIONS", "🔀 Has BOTH positions, closing opposite side");
-            if (direction == "BULLISH")
-            {
-                DebugLogFile("CLOSE_SELL_FOR_BULLISH", "Closing SELL for BULLISH signal");
-                return ACTION_CLOSE_SELL;
-            }
-            else if (direction == "BEARISH")
-            {
-                DebugLogFile("CLOSE_BUY_FOR_BEARISH", "Closing BUY for BEARISH signal");
-                return ACTION_CLOSE_BUY;
-            }
-        }
-
-        DebugLogFile("CLOSING_DECISION", "⏸️ No closing needed, Decision: HOLD");
-        return ACTION_HOLD;
     }
 
     // ================= POSITION ANALYSIS =================

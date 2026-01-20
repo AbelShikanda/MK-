@@ -16,7 +16,7 @@
 // ================= FORWARD DECLARATIONS =================
 
 // ==================== DEBUG SETTINGS ====================
-bool POSITION_DEBUG_ENABLED = false;
+bool POSITION_DEBUG_ENABLED = true;
 
 // Simple debug function using Logger
 void PositionDebugLog(string context, string message)
@@ -991,68 +991,125 @@ namespace PositionManager
 
     bool CheckMargin(string symbol, double lotSize, double safetyBuffer = 0.8)
     {
-        PositionDebugLog("POSITION-MARGIN", StringFormat("Checking margin for %s: %.3f lots | Safety buffer: %.0f%%",
-                                                         symbol, lotSize, safetyBuffer * 100));
+        PositionDebugLog("POSITION-MARGIN", StringFormat("=== MARGIN CALCULATION v2 === | Symbol: %s | LotSize: %.3f", symbol, lotSize));
 
-        // Get correct margin calculation
-        double marginRequired = 0;
-        double marginPerLot = SymbolInfoDouble(symbol, SYMBOL_MARGIN_INITIAL);
+        // 1. Get current market data
+        double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
+        double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
+        double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+        double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+        double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
         double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
 
-        PositionDebugLog("POSITION-MARGIN-DETAILS",
-                         StringFormat("%s: Margin per lot=%.2f, Contract size=%.0f, Lots=%.3f",
-                                      symbol, marginPerLot, contractSize, lotSize));
+        PositionDebugLog("POSITION-MARGIN-DATA",
+                         StringFormat("Price: Bid=%.5f, Ask=%.5f | Point=%.5f | TickValue=%.5f | TickSize=%.5f | ContractSize=%.0f",
+                                      bid, ask, point, tickValue, tickSize, contractSize));
 
-        // Try different calculation methods
-        if (marginPerLot > 0)
+        // 2. METHOD 1: Use MQL5's built-in margin calculation (MOST RELIABLE)
+        double marginRequired = 0;
+        ENUM_ORDER_TYPE orderType = ORDER_TYPE_BUY; // Use BUY for calculation (conservative)
+        MqlTradeRequest request = {};
+        MqlTradeResult result = {};
+
+        request.action = TRADE_ACTION_DEAL;
+        request.symbol = symbol;
+        request.volume = lotSize;
+        request.type = orderType;
+        request.price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+
+        // Try to get margin using OrderCalcMargin
+        if (!OrderCalcMargin(orderType, symbol, lotSize, request.price, marginRequired))
         {
-            // Standard calculation
-            marginRequired = marginPerLot * lotSize;
-            PositionDebugLog("POSITION-MARGIN-DETAILS",
-                             StringFormat("Standard calculation: %.2f × %.3f = $%.2f",
-                                          marginPerLot, lotSize, marginRequired));
-        }
-        else
-        {
-            // Alternative calculation for symbols without direct margin info
-            double price = SymbolInfoDouble(symbol, SYMBOL_BID);
-            marginRequired = (price * lotSize * contractSize) / 50.0; // 2% margin estimate
-            PositionDebugLog("POSITION-MARGIN-DETAILS",
-                             StringFormat("Alternative calculation: %.2f × %.3f × %.0f / 50 = $%.2f",
-                                          price, lotSize, contractSize, marginRequired));
+            PositionDebugLog("POSITION-MARGIN-WARNING", "OrderCalcMargin failed, using alternative calculation");
+
+            // METHOD 2: Alternative calculation based on symbol type
+            if (symbol == "XAUUSD" || symbol == "GOLD")
+            {
+                // Gold margin: Approximately 1% of position value
+                double positionValue = bid * lotSize * contractSize;
+                marginRequired = positionValue * 0.01; // 1% margin for gold
+                PositionDebugLog("POSITION-MARGIN-GOLD",
+                                 StringFormat("Gold alternative: PositionValue=$%.2f × 1%% = $%.2f",
+                                              positionValue, marginRequired));
+            }
+            else if (symbol == "XAGUSD")
+            {
+                // Silver margin: Similar to gold
+                double positionValue = bid * lotSize * contractSize;
+                marginRequired = positionValue * 0.02; // 2% margin for silver
+                PositionDebugLog("POSITION-MARGIN-SILVER",
+                                 StringFormat("Silver alternative: PositionValue=$%.2f × 2%% = $%.2f",
+                                              positionValue, marginRequired));
+            }
+            else
+            {
+                // Forex pairs: Usually 0.5-3% margin
+                double positionValue = bid * lotSize * 100000; // Standard lot = 100,000 units
+                marginRequired = positionValue * 0.01;         // 1% margin for forex
+                PositionDebugLog("POSITION-MARGIN-FOREX",
+                                 StringFormat("Forex alternative: PositionValue=$%.2f × 1%% = $%.2f",
+                                              positionValue, marginRequired));
+            }
         }
 
-        // Special handling for XAUUSD/Gold
+        // 3. Apply conservative multiplier for volatile instruments
+        double volatilityMultiplier = 1.0;
+
         if (symbol == "XAUUSD" || symbol == "GOLD")
         {
-            PositionDebugLog("POSITION-MARGIN-GOLD", "⚠️ Gold detected - applying margin multiplier");
-            double goldMultiplier = 2.5; // Gold typically requires 5x more margin
-            marginRequired *= goldMultiplier;
-            PositionDebugLog("POSITION-MARGIN-GOLD",
-                             StringFormat("Gold margin: $%.2f × %.1f = $%.2f",
-                                          marginRequired / goldMultiplier, goldMultiplier, marginRequired));
+            volatilityMultiplier = 3.0; // Gold requires 3x more margin
+            PositionDebugLog("POSITION-MARGIN-GOLD", StringFormat("Applying gold multiplier: %.1fx", volatilityMultiplier));
+        }
+        else if (symbol == "XAGUSD")
+        {
+            volatilityMultiplier = 4.0; // Silver requires 4x more margin
+            PositionDebugLog("POSITION-MARGIN-SILVER", StringFormat("Applying silver multiplier: %.1fx", volatilityMultiplier));
+        }
+        else if (symbol == "BTCUSD" || symbol == "ETHUSD")
+        {
+            volatilityMultiplier = 5.0; // Crypto requires 5x more margin
+            PositionDebugLog("POSITION-MARGIN-CRYPTO", StringFormat("Applying crypto multiplier: %.1fx", volatilityMultiplier));
         }
 
+        marginRequired *= volatilityMultiplier;
+
+        // 4. Get account information
         double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
         double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-        double marginLevel = (equity > 0) ? (freeMargin / equity) * 100 : 0;
+        double usedMargin = AccountInfoDouble(ACCOUNT_MARGIN);
+        double balance = AccountInfoDouble(ACCOUNT_BALANCE);
 
-        bool result = marginRequired <= freeMargin * safetyBuffer;
+        // 5. Calculate available margin (with safety buffer)
+        double availableMargin = freeMargin * safetyBuffer;
 
-        PositionDebugLog("POSITION-MARGIN", StringFormat("Margin: Required: $%.2f | Free: $%.2f | Equity: $%.2f | Level: %.1f%%",
-                                                         marginRequired, freeMargin, equity, marginLevel));
+        PositionDebugLog("POSITION-MARGIN-ACCOUNT",
+                         StringFormat("Account: Balance=$%.2f, Equity=$%.2f, Free=$%.2f, Used=$%.2f, Available=$%.2f (%.0f%% buffer)",
+                                      balance, equity, freeMargin, usedMargin, availableMargin, safetyBuffer * 100));
 
-        if (!result)
+        PositionDebugLog("POSITION-MARGIN-RESULT",
+                         StringFormat("Required: $%.2f | Available: $%.2f | Ratio: %.1f%%",
+                                      marginRequired, availableMargin, (marginRequired / availableMargin) * 100));
+
+        // 6. Check if we have enough margin
+        bool res = marginRequired <= availableMargin;
+
+        if (!res)
         {
-            PositionDebugLog("POSITION-MARGIN", StringFormat("❌ Margin check failed: Required $%.2f > Available $%.2f (%.0f%%)",
-                                                             marginRequired, freeMargin * safetyBuffer, safetyBuffer * 100));
+            PositionDebugLog("POSITION-MARGIN-FAILED",
+                             StringFormat("❌ MARGIN CHECK FAILED: Required $%.2f > Available $%.2f (%.1f%% buffer)",
+                                          marginRequired, availableMargin, safetyBuffer * 100));
+
+            // Calculate maximum lot size we CAN trade
+            double maxLotSize = (availableMargin / marginRequired) * lotSize;
+            PositionDebugLog("POSITION-MARGIN-MAXLOT",
+                             StringFormat("Maximum lot size possible: %.3f (requested: %.3f)", maxLotSize, lotSize));
         }
         else
         {
-            PositionDebugLog("POSITION-MARGIN", "✅ Margin check passed");
+            PositionDebugLog("POSITION-MARGIN-SUCCESS", "✅ Margin check passed");
         }
 
-        return result;
+        return res;
     }
 
     double GetEntryPrice(string symbol, bool isBuy)
