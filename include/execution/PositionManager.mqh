@@ -16,7 +16,7 @@
 // ================= FORWARD DECLARATIONS =================
 
 // ==================== DEBUG SETTINGS ====================
-bool POSITION_DEBUG_ENABLED = true;
+bool POSITION_DEBUG_ENABLED = false;
 
 // Simple debug function using Logger
 void PositionDebugLog(string context, string message)
@@ -534,17 +534,10 @@ namespace PositionManager
         {
             PositionDebugLog("POSITION-OPEN", "✅ SUCCESS: Position opened");
 
-            // Log trade
-            Logger::LogTrade("PositionManager", symbol, isBuy ? "BUY" : "SELL", lotSize, entryPrice);
-            Logger::ShowDecisionFast(symbol, isBuy ? 1 : -1, 0.9,
-                                     StringFormat("Entry: %.5f, SL: %.5f, TP: %.5f",
-                                                  entryPrice, stopLoss, takeProfit));
-
-            Logger::Log("PositionManager",
-                        StringFormat("%s %s opened: %.3f lots @ %.5f (SL: %.5f, TP: %.5f, Risk: %.2f%%)",
-                                     symbol, isBuy ? "BUY" : "SELL", lotSize, entryPrice,
-                                     stopLoss, takeProfit, riskPercent));
-            // ExpertRemove();
+            // Log trade using PositionDebugLog wrapper
+            PositionDebugLog("POSITION-TRADE", StringFormat("%s %s opened: %.3f lots @ %.5f (SL: %.5f, TP: %.5f, Risk: %.2f%%)",
+                                                            symbol, isBuy ? "BUY" : "SELL", lotSize, entryPrice,
+                                                            stopLoss, takeProfit, riskPercent));
             return true;
         }
         else
@@ -678,18 +671,14 @@ namespace PositionManager
                             totalLoss += profit;
 
                         PositionDebugLog("POSITION-CLOSE-ALL", "✅ Position closed successfully");
-                        Logger::Log("PositionManager",
-                                    StringFormat("Closed %s: %.3f lots, P/L: $%.2f",
-                                                 posSymbol, volume, profit),
-                                    false, false);
+                        PositionDebugLog("POSITION-CLOSE-DETAIL", StringFormat("Closed %s: %.3f lots, P/L: $%.2f",
+                                                                               posSymbol, volume, profit));
                     }
                     else
                     {
                         int errorCode = GetLastError();
                         PositionDebugLog("POSITION-CLOSE-ALL", StringFormat("❌ Failed to close position: Error %d", errorCode));
-                        Logger::Log("PositionManager",
-                                    StringFormat("Failed to close %s: Error %d", posSymbol, errorCode),
-                                    true, true);
+                        PositionDebugLog("POSITION-ERROR", StringFormat("Failed to close %s: Error %d", posSymbol, errorCode));
                     }
                 }
             }
@@ -701,19 +690,15 @@ namespace PositionManager
             {
                 PositionDebugLog("POSITION-CLOSE-ALL", StringFormat("✅ SUCCESS: All %d positions closed | Total P/L: $%.2f | Losses: $%.2f",
                                                                     closedCount, totalProfit, totalLoss));
-                Logger::Log("PositionManager",
-                            StringFormat("All %d positions closed: $%.2f total",
-                                         closedCount, totalProfit),
-                            true, true);
+                PositionDebugLog("POSITION-SUMMARY", StringFormat("All %d positions closed: $%.2f total",
+                                                                  closedCount, totalProfit));
             }
             else
             {
                 PositionDebugLog("POSITION-CLOSE-ALL", StringFormat("⚠️ PARTIAL: Closed %d/%d positions | Total P/L: $%.2f",
                                                                     closedCount, attemptedCount, totalProfit));
-                Logger::Log("PositionManager",
-                            StringFormat("Partial close: %d/%d positions closed: $%.2f",
-                                         closedCount, attemptedCount, totalProfit),
-                            true, true);
+                PositionDebugLog("POSITION-SUMMARY", StringFormat("Partial close: %d/%d positions closed: $%.2f",
+                                                                  closedCount, attemptedCount, totalProfit));
             }
             return closedCount > 0;
         }
@@ -742,9 +727,7 @@ namespace PositionManager
         if (trade.PositionClose(ticket))
         {
             PositionDebugLog("POSITION-CLOSE-SINGLE", "✅ Position closed successfully");
-            Logger::Log("PositionManager",
-                        StringFormat("Closed %s (Ticket: %d): $%.2f", symbol, ticket, profit),
-                        false, false);
+            PositionDebugLog("POSITION-CLOSE-DETAIL", StringFormat("Closed %s (Ticket: %d): $%.2f", symbol, ticket, profit));
             return true;
         }
         else
@@ -934,6 +917,7 @@ namespace PositionManager
 
     void UpdateTrailingStops(int magicNumber = 0, double minProfit = 5.0, ENUM_TIMEFRAMES tf = PERIOD_M15)
     {
+        PositionDebugLog("TRAILING-STOP", "Updating trailing stops...");
         int updated = 0;
 
         for (int i = PositionsTotal() - 1; i >= 0; i--)
@@ -979,12 +963,16 @@ namespace PositionManager
                     CTrade trade;
                     trade.PositionModify(ticket, newSL, currentTP);
                     updated++;
+                    PositionDebugLog("TRAILING-STOP-UPDATE", StringFormat("Updated trailing stop for %s: %.5f -> %.5f",
+                                                                          symbol, currentSL, newSL));
                 }
             }
         }
 
         if (updated > 0)
-            Print(StringFormat("Updated %d trailing stops", updated));
+        {
+            PositionDebugLog("TRAILING-STOP", StringFormat("Updated %d trailing stops", updated));
+        }
     }
 
     // ==================== UTILITY FUNCTIONS ====================
@@ -1057,7 +1045,7 @@ namespace PositionManager
 
         if (symbol == "XAUUSD" || symbol == "GOLD")
         {
-            volatilityMultiplier = 3.0; // Gold requires 3x more margin
+            volatilityMultiplier = 2.0; // Gold requires 2x more margin
             PositionDebugLog("POSITION-MARGIN-GOLD", StringFormat("Applying gold multiplier: %.1fx", volatilityMultiplier));
         }
         else if (symbol == "XAGUSD")
@@ -1176,9 +1164,7 @@ namespace PositionManager
             {
                 PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("✅ Closed smallest profit: %s $%.2f",
                                                                        outClosedSymbol, smallestProfit));
-                Logger::Log("PositionManager",
-                            StringFormat("Closed smallest profit (%s): $%.2f", outClosedSymbol, smallestProfit),
-                            false, false);
+                PositionDebugLog("POSITION-CLOSE-DETAIL", StringFormat("Closed smallest profit (%s): $%.2f", outClosedSymbol, smallestProfit));
                 return true;
             }
             else
@@ -1241,9 +1227,7 @@ namespace PositionManager
             {
                 PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("✅ Closed biggest loss: %s $%.2f",
                                                                        outClosedSymbol, biggestLoss));
-                Logger::Log("PositionManager",
-                            StringFormat("Closed biggest loss (%s): $%.2f", outClosedSymbol, biggestLoss),
-                            true, true);
+                PositionDebugLog("POSITION-CLOSE-DETAIL", StringFormat("Closed biggest loss (%s): $%.2f", outClosedSymbol, biggestLoss));
                 return true;
             }
             else
@@ -1306,9 +1290,7 @@ namespace PositionManager
             {
                 PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("✅ Closed smallest loss: %s $%.2f",
                                                                        outClosedSymbol, smallestLoss));
-                Logger::Log("PositionManager",
-                            StringFormat("Closed smallest loss (%s): $%.2f", outClosedSymbol, smallestLoss),
-                            false, false);
+                PositionDebugLog("POSITION-CLOSE-DETAIL", StringFormat("Closed smallest loss (%s): $%.2f", outClosedSymbol, smallestLoss));
                 return true;
             }
             else
@@ -1375,9 +1357,7 @@ namespace PositionManager
             {
                 PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("✅ Closed oldest: %s opened %s | P/L: $%.2f",
                                                                        outClosedSymbol, TimeToString(oldestTime), profitToClose));
-                Logger::Log("PositionManager",
-                            StringFormat("Closed oldest position (%s): $%.2f", outClosedSymbol, profitToClose),
-                            false, false);
+                PositionDebugLog("POSITION-CLOSE-DETAIL", StringFormat("Closed oldest position (%s): $%.2f", outClosedSymbol, profitToClose));
                 return true;
             }
             else
@@ -1444,9 +1424,7 @@ namespace PositionManager
             {
                 PositionDebugLog("POSITION-CLOSE-HELPER", StringFormat("✅ Closed newest: %s opened %s | P/L: $%.2f",
                                                                        outClosedSymbol, TimeToString(newestTime), profitToClose));
-                Logger::Log("PositionManager",
-                            StringFormat("Closed newest position (%s): $%.2f", outClosedSymbol, profitToClose),
-                            false, false);
+                PositionDebugLog("POSITION-CLOSE-DETAIL", StringFormat("Closed newest position (%s): $%.2f", outClosedSymbol, profitToClose));
                 return true;
             }
             else
@@ -1532,15 +1510,14 @@ namespace PositionManager
 
         if (result)
         {
-            Logger::Log("PositionManager",
-                        StringFormat("Interface executed: %s %s (Confidence: %.1f%%, Dir: %s)",
-                                     symbol, isBuy ? "BUY" : "SELL",
-                                     package.overallConfidence, package.dominantDirection),
-                        true, true);
+            PositionDebugLog("POSITION-PACKAGE-SUCCESS",
+                             StringFormat("Interface executed: %s %s (Confidence: %.1f%%, Dir: %s)",
+                                          symbol, isBuy ? "BUY" : "SELL",
+                                          package.overallConfidence, package.dominantDirection));
         }
         else
         {
-            Logger::LogError("PositionManager",
+            PositionDebugLog("POSITION-PACKAGE-ERROR",
                              StringFormat("Failed to execute interface: %s %s (Confidence: %.1f%%)",
                                           symbol, isBuy ? "BUY" : "SELL", package.overallConfidence));
         }
@@ -1641,10 +1618,9 @@ namespace PositionManager
                                      StringFormat("✅ BREAKEVEN HIT at 50%% to TP! Moved SL to entry: %.5f (was: %.5f)",
                                                   entry, sl));
 
-                    Logger::Log("PositionManager",
-                                StringFormat("Breakeven achieved: %s SL moved to entry at %.1f%% to TP",
-                                             symbol, percentToTP),
-                                false, false);
+                    PositionDebugLog("BREAKEVEN-DETAIL",
+                                     StringFormat("Breakeven achieved: %s SL moved to entry at %.1f%% to TP",
+                                                  symbol, percentToTP));
                 }
                 else
                 {
@@ -1686,9 +1662,6 @@ namespace PositionManager
             double sl = PositionGetDouble(POSITION_SL);
             bool isBuy = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
 
-            if (volume < 0.02)
-                continue;
-
             // Get or create tracker
             int trackerIndex = GetProfitTrackerIndex(ticket);
 
@@ -1711,13 +1684,13 @@ namespace PositionManager
             }
 
             PositionDebugLog("PROFIT-SMART-CHECK",
-                             StringFormat("%s: Profit=$%.2f | Target=$%.2f | %% to TP=%.1f%% | Highest seen=%.1f%% | Closed=%.1f%%",
-                                          symbol, profit, targetProfit, percentToTP,
+                             StringFormat("%s: Vol=%.3f | Profit=$%.2f | %% to TP=%.1f%% | Highest seen=%.1f%% | Closed=%.1f%%",
+                                          symbol, volume, profit, percentToTP,
                                           trackers[trackerIndex].highestPercentSeen,
                                           trackers[trackerIndex].totalClosedPercent * 100));
 
-            // ==================== 1. BREAKEVEN AT 35% ====================
-            if (!trackers[trackerIndex].milestone50Processed && percentToTP >= 36.0 && sl != entry && profit > 0)
+            // ==================== 1. BREAKEVEN AT 27% (ALWAYS APPLY FOR ANY VOLUME) ====================
+            if (!trackers[trackerIndex].milestone50Processed && percentToTP >= 27.0 && sl != entry && profit > 0)
             {
                 // Move stop loss to entry price (breakeven)
                 CTrade tradeBE;
@@ -1725,26 +1698,26 @@ namespace PositionManager
                 {
                     slMovedToBE = true;
                     trackers[trackerIndex].milestone50Processed = true;
+                    positionsActed++;
 
                     PositionDebugLog("PROFIT-SMART-BREAKEVEN",
-                                     StringFormat("✅ BREAKEVEN at 35%% to TP! Moved SL from %.5f to entry %.5f",
-                                                  sl, entry));
+                                     StringFormat("✅ BREAKEVEN at 35%% to TP! Moved SL from %.5f to entry %.5f | Volume: %.3f",
+                                                  sl, entry, volume));
 
-                    Logger::Log("PositionManager",
-                                StringFormat("Breakeven: %s SL moved to entry at %.1f%% to TP",
-                                             symbol, percentToTP),
-                                false, false);
+                    PositionDebugLog("PROFIT-SMART-DETAIL",
+                                     StringFormat("Breakeven: %s (%.3f lots) SL moved to entry at %.1f%% to TP",
+                                                  symbol, volume, percentToTP));
                 }
                 else
                 {
                     int error = GetLastError();
                     PositionDebugLog("PROFIT-SMART-BREAKEVEN-ERROR",
-                                     StringFormat("Failed to move SL to breakeven: Error %d", error));
+                                     StringFormat("Failed to move SL to breakeven: Error %d | Symbol: %s", error, symbol));
                 }
             }
 
-            // ==================== 2. MOVE SL TO 20% PROFIT AT 70% ====================
-            if (!trackers[trackerIndex].slMovedTo20Percent && percentToTP >= 63.0 && profit > 0 && tp > 0)
+            // ==================== 2. MOVE SL TO 20% PROFIT AT 65% (ALWAYS APPLY FOR ANY VOLUME) ====================
+            if (!trackers[trackerIndex].slMovedTo20Percent && percentToTP >= 65.0 && profit > 0 && tp > 0)
             {
                 double currentPrice = SymbolInfoDouble(symbol, isBuy ? SYMBOL_BID : SYMBOL_ASK);
                 double newSL = 0;
@@ -1774,26 +1747,53 @@ namespace PositionManager
                     {
                         slMovedTo20Percent = true;
                         trackers[trackerIndex].slMovedTo20Percent = true;
+                        positionsActed++;
 
                         PositionDebugLog("PROFIT-SMART-SL-MOVE",
-                                         StringFormat("✅ MOVED SL TO 20%% PROFIT at %.1f%% to TP! SL from %.5f to %.5f",
-                                                      percentToTP, sl, newSL));
+                                         StringFormat("✅ MOVED SL TO 20%% PROFIT at %.1f%% to TP! SL: %.5f → %.5f | Volume: %.3f",
+                                                      percentToTP, sl, newSL, volume));
 
-                        Logger::Log("PositionManager",
-                                    StringFormat("20%% Profit Lock: %s SL moved to %.5f at %.1f%% to TP",
-                                                 symbol, newSL, percentToTP),
-                                    false, false);
+                        PositionDebugLog("PROFIT-SMART-DETAIL",
+                                         StringFormat("20%% Profit Lock: %s (%.3f lots) SL moved to %.5f",
+                                                      symbol, volume, newSL));
                     }
                     else
                     {
                         int error = GetLastError();
                         PositionDebugLog("PROFIT-SMART-SL-ERROR",
-                                         StringFormat("Failed to move SL to 20%% profit: Error %d", error));
+                                         StringFormat("Failed to move SL to 20%% profit: Error %d | Symbol: %s", error, symbol));
                     }
                 }
             }
 
-            // ==================== 3. PROFIT SECURING AT 10% INTERVALS FROM 10% TO 90% ====================
+            // ==================== 3. PARTIAL PROFIT SECURING (SKIP FOR SMALL VOLUMES) ====================
+            // Only process partial closes if volume is sufficient
+            if (volume < 0.02)
+            {
+                PositionDebugLog("PROFIT-SMART-SKIP-PARTIAL",
+                                 StringFormat("%s: Volume %.3f < 0.02 - Skipping partial profit taking",
+                                              symbol, volume));
+
+                // Optionally: Consider full close for micro lots at high profit levels
+                if (percentToTP >= 90.0 && profit > 0)
+                {
+                    PositionDebugLog("PROFIT-SMART-MICRO-CLOSE",
+                                     StringFormat("Considering full close for micro lot %s: %.3f lots at %.1f%% to TP ($%.2f)",
+                                                  symbol, volume, percentToTP, profit));
+
+                    // Optional: Add logic here to close entire micro position at certain profit levels
+                    // if (percentToTP >= 90.0) {
+                    //     CTrade trade;
+                    //     if (trade.PositionClose(ticket)) {
+                    //         closed = true;
+                    //         positionsActed++;
+                    //     }
+                    // }
+                }
+                continue; // Skip partial profit taking for small volumes
+            }
+
+            // ==================== PROFIT SECURING AT 10% INTERVALS FROM 10% TO 90% ====================
             // Skip if below 10% to TP (too early to start taking profit)
             if (percentToTP < 10.0)
             {
@@ -1891,8 +1891,8 @@ namespace PositionManager
                 }
 
                 PositionDebugLog("PROFIT-SMART-ACTION",
-                                 StringFormat("Executing: Close %.3f lots (%.1f%% of position) at %.1f%% to TP",
-                                              volumeToClose, additionalClose * 100, percentToTP));
+                                 StringFormat("Executing: Close %.3f lots (%.1f%% of %.3f total) at %.1f%% to TP",
+                                              volumeToClose, additionalClose * 100, volume, percentToTP));
 
                 CTrade trade;
                 if (trade.PositionClosePartial(ticket, volumeToClose))
@@ -1905,10 +1905,9 @@ namespace PositionManager
                                      StringFormat("✅ Closed: %.3f lots | Total closed: %.1f%%",
                                                   volumeToClose, trackers[trackerIndex].totalClosedPercent * 100));
 
-                    Logger::Log("PositionManager",
-                                StringFormat("Profit Secure: %s closed %.3f lots at %.1f%% to TP",
-                                             symbol, volumeToClose, percentToTP),
-                                false, false);
+                    PositionDebugLog("PROFIT-SMART-DETAIL",
+                                     StringFormat("Profit Secure: %s closed %.3f lots at %.1f%% to TP",
+                                                  symbol, volumeToClose, percentToTP));
                 }
                 else
                 {

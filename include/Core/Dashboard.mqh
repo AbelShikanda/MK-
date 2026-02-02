@@ -16,6 +16,15 @@
 #include "../Execution/PositionManager.mqh"
 #include "../Core/PackageManager.mqh"
 
+// ==================== DEBUG SETTINGS ====================
+bool DEBUG_DASHBOARD_ENABLED = false;
+
+void DebugLogDashboard(string context, string message, bool logToFile = true, bool logToConsole = false)
+{
+    if (DEBUG_DASHBOARD_ENABLED)
+        Logger::Log("DASHBOARD-" + context, message, logToFile, logToConsole);
+}
+
 // ==================== DISPLAY CONFIGURATION ====================
 input color HeaderColor = clrDodgerBlue;
 input color SectionColor = clrGold;
@@ -46,6 +55,7 @@ public:
                           m_lastDisplay(""),
                           m_lastUpdateTime(0)
     {
+        DebugLogDashboard("CONSTRUCTOR", "EnhancedDashboard created");
     }
 
     // Initialize with required components
@@ -53,9 +63,11 @@ public:
                     PackageManager *pkgManager,
                     DecisionEngine *decisionEng)
     {
+        DebugLogDashboard("INIT", StringFormat("Initializing dashboard for %s, magic: %d", symbol, magicNumber));
+        
         if (symbol == "" || pkgManager == NULL || decisionEng == NULL)
         {
-            Print("ERROR: EnhancedDashboard - Invalid initialization parameters");
+            DebugLogDashboard("ERROR", "Invalid initialization parameters");
             return false;
         }
 
@@ -64,14 +76,16 @@ public:
         m_packageManager = pkgManager;
         m_decisionEngine = decisionEng;
 
-        Print("EnhancedDashboard initialized for " + symbol);
+        DebugLogDashboard("INIT", "EnhancedDashboard initialized successfully for " + symbol);
         return true;
     }
 
     // Cleanup
     void Deinitialize()
     {
+        DebugLogDashboard("DEINIT", "Deinitializing dashboard");
         // Nothing to delete
+        DebugLogDashboard("DEINIT", "Dashboard cleanup complete");
     }
 
     // Main update function
@@ -79,7 +93,10 @@ public:
     {
         // Update every 2 seconds
         if (!forceUpdate && (TimeCurrent() - m_lastUpdateTime) < 2)
+        {
+            DebugLogDashboard("UPDATE", "Skipping update (too soon)");
             return;
+        }
 
         m_lastUpdateTime = TimeCurrent();
 
@@ -89,12 +106,19 @@ public:
         {
             Comment(display);
             m_lastDisplay = display;
+            DebugLogDashboard("UPDATE", "Display updated successfully");
+        }
+        else
+        {
+            DebugLogDashboard("UPDATE", "Display unchanged, skipping update");
         }
     }
 
     // Generate enhanced dashboard
     string GenerateEnhancedDashboard()
     {
+        DebugLogDashboard("GENERATE", "Generating dashboard display");
+        
         string display = "";
 
         display += "\n\n";
@@ -144,6 +168,10 @@ public:
                                         isRangePackage ? "RANGE" : "TREND",
                                         actualProcessor);
                 display += UnderLining();
+                
+                DebugLogDashboard("WARNING", StringFormat("Package/Processor mismatch: Package=%s, Processor=%s",
+                                                         isRangePackage ? "RANGE" : "TREND",
+                                                         actualProcessor));
             }
         }
 
@@ -174,6 +202,7 @@ public:
 
         display += SeparatorLine();
 
+        DebugLogDashboard("GENERATE", "Dashboard generation complete");
         return display;
     }
 
@@ -187,8 +216,13 @@ private:
         double margin = AccountInfoDouble(ACCOUNT_MARGIN);
         double marginLevel = margin > 0 ? equity / margin * 100 : 0;
 
-        return StringFormat("| Account      : $%.0f | Eq: $%.0f | ML: %.1f%% | %s\n",
+        string section = StringFormat("| Account      : $%.0f | Eq: $%.0f | ML: %.1f%% | %s\n",
                             balance, equity, marginLevel, GetTradingSessionShort());
+        
+        DebugLogDashboard("ACCOUNT_INFO", StringFormat("Balance: $%.0f, Equity: $%.0f, MarginLevel: %.1f%%", 
+                                                       balance, equity, marginLevel));
+        
+        return section;
     }
 
     string GenerateSignalsSection()
@@ -210,15 +244,19 @@ private:
                 // Display package regime with timestamp context
                 section += StringFormat("| Signal       : %s (from package, %d sec ago)\n",
                                         regimeFromPackage, packageAge);
+                
+                DebugLogDashboard("SIGNALS", StringFormat("Regime: %s, Age: %d sec", regimeFromPackage, packageAge));
             }
             else
             {
                 section += "| Signal       : NO_PACKAGE | WAITING\n";
+                DebugLogDashboard("SIGNALS", "No valid package available");
             }
         }
         else
         {
             section += "| Signal       : NO_DECISION_ENGINE\n";
+            DebugLogDashboard("ERROR", "No decision engine available");
         }
 
         return section;
@@ -258,15 +296,21 @@ private:
                                             lastPackage.trapProbability,
                                             lastPackage.isTrapZone ? "YES" : "NO");
                 }
+                
+                DebugLogDashboard("PACKAGE_INFO", 
+                                 StringFormat("Type: %s, Direction: %s, Action: %s, Confidence: %.0f%%, Processor: %s",
+                                             packageType, direction, action, lastPackage.overallConfidence, actualProcessor));
             }
             else
             {
                 section += "| Package      : NO_VALID_PACKAGE | Proc: NONE | Conf: 0%\n";
+                DebugLogDashboard("PACKAGE_INFO", "No valid package available");
             }
         }
         else
         {
             section += "| Package      : NO_DECISION_ENGINE\n";
+            DebugLogDashboard("ERROR", "No decision engine available");
         }
 
         return section;
@@ -278,13 +322,21 @@ private:
         string section = "";
 
         if (m_decisionEngine == NULL)
-            return "| Components    : NO DATA\n";
+        {
+            section = "| Components    : NO DATA\n";
+            DebugLogDashboard("COMPONENTS", "No decision engine available");
+            return section;
+        }
 
         DecisionEngineInterface lastPackage = m_decisionEngine.GetLastPackage(m_symbol);
         string actualProcessor = m_decisionEngine.GetLastProcessorUsed(m_symbol);
 
         if (!lastPackage.IsValid())
-            return "| Components    : NO VALID PACKAGE\n";
+        {
+            section = "| Components    : NO VALID PACKAGE\n";
+            DebugLogDashboard("COMPONENTS", "No valid package available");
+            return section;
+        }
 
         section += "| Components    : ";
 
@@ -292,10 +344,12 @@ private:
         if (actualProcessor == "RANGE")
         {
             section += GetDetailedRangeComponents(lastPackage);
+            DebugLogDashboard("COMPONENTS", "Using RANGE processor components");
         }
         else if (actualProcessor == "TREND")
         {
             section += GetDetailedTrendComponents(lastPackage);
+            DebugLogDashboard("COMPONENTS", "Using TREND processor components");
         }
         else
         {
@@ -303,15 +357,16 @@ private:
             if (lastPackage.IsRangePackage())
             {
                 section += GetDetailedRangeComponents(lastPackage);
+                DebugLogDashboard("COMPONENTS", "Falling back to RANGE components (by package type)");
             }
             else
             {
                 section += GetDetailedTrendComponents(lastPackage);
+                DebugLogDashboard("COMPONENTS", "Falling back to TREND components (by package type)");
             }
         }
 
         section += "\n";
-
         return section;
     }
 
@@ -393,10 +448,16 @@ private:
                                            
                 // Add overall confidence
                 components += StringFormat(" | Overall: %.0f%%", trendPackage.overallConfidence);
+                
+                DebugLogDashboard("TREND_COMPONENTS", 
+                                 StringFormat("Direction: %s, Score: %.1f, Confidence: %.0f%%, Bulls: %d, Bears: %d",
+                                             overallDir, overallScore, trendPackage.overallConfidence,
+                                             trendPackage.mtfData.bullishCount, trendPackage.mtfData.bearishCount));
             }
             else
             {
                 components = "NO_TREND_DATA";
+                DebugLogDashboard("TREND_COMPONENTS", "No trend data available");
             }
         }
         else
@@ -406,6 +467,10 @@ private:
             components = StringFormat("%s/%.1f ", dirSymbol, package.weightedScore);
             components += UnderLining();
             components += StringFormat("TREND/%s/%d%%", dirSymbol, (int)package.overallConfidence);
+            
+            DebugLogDashboard("TREND_COMPONENTS", 
+                             StringFormat("Fallback: Direction: %s, Score: %.1f, Confidence: %.0f%%",
+                                         dirSymbol, package.weightedScore, package.overallConfidence));
         }
 
         return components;
@@ -435,6 +500,11 @@ private:
         {
             components += StringFormat(" | ACT:%s", package.rangeAction);
         }
+        
+        DebugLogDashboard("RANGE_COMPONENTS", 
+                         StringFormat("Direction: %s, Score: %.1f, Confidence: %.0f%%, Trap: %.0f%%, Action: %s",
+                                     overallDir, package.weightedScore, package.overallConfidence,
+                                     package.trapProbability, package.rangeAction));
 
         return components;
     }
@@ -472,15 +542,21 @@ private:
                 
                 section += StringFormat("| Setup        : %s | SL: %.1f | TP: %.1f | RR: %.1f\n",
                                         posSize, stopLoss, takeProfit, riskReward);
+                
+                DebugLogDashboard("SETUP", 
+                                 StringFormat("Size: %s, SL: %.1f, TP: %.1f, RR: %.1f",
+                                             posSize, stopLoss, takeProfit, riskReward));
             }
             else
             {
                 section += "| Setup        : NO_PACKAGE | SL: 0.0 | TP: 0.0 | RR: 0.0\n";
+                DebugLogDashboard("SETUP", "No package available for setup");
             }
         }
         else
         {
             section += "| Setup        : NO_DECISION_ENGINE\n";
+            DebugLogDashboard("ERROR", "No decision engine available for setup");
         }
 
         return section;
@@ -509,10 +585,18 @@ private:
                     warning = "AVOID ";
                     
                 section += StringFormat("| Action       : %s%s\n", warning, action);
+                
+                DebugLogDashboard("ACTION", 
+                                 StringFormat("Action: %s%s, TrapZone: %s, TrapProb: %.0f%%, Avoid: %s",
+                                             warning, action,
+                                             lastPackage.isTrapZone ? "YES" : "NO",
+                                             lastPackage.trapProbability,
+                                             lastPackage.isAvoidSignal ? "YES" : "NO"));
             }
             else
             {
                 section += "| Action       : NO_PACKAGE\n";
+                DebugLogDashboard("ACTION", "No package available for action");
             }
         }
 
@@ -537,10 +621,14 @@ private:
                     description = lastPackage.recommendedAction;
                     
                 section += StringFormat("| Description  : %s\n", TruncateString(description, 60));
+                
+                DebugLogDashboard("DESCRIPTION", 
+                                 StringFormat("Description: %s", TruncateString(description, 60)));
             }
             else
             {
                 section += "| Description  : NO_PACKAGE\n";
+                DebugLogDashboard("DESCRIPTION", "No package available for description");
             }
         }
 
@@ -566,10 +654,15 @@ private:
 
             section += StringFormat("| Decision     : %s | %s | %s",
                                     decisionStr, positionStr, positionDir);
+                                    
+            DebugLogDashboard("DECISION", 
+                             StringFormat("Decision: %s, Positions: %d, Direction: %s",
+                                         decisionStr, positionCount, positionDir));
         }
         else
         {
             section += "| Decision      : NONE | NO_POS | NO_DIR";
+            DebugLogDashboard("DECISION", "No decision engine available");
         }
 
         // Statistics
@@ -608,10 +701,16 @@ private:
                                     metrics.profitableDecisions,
                                     losingTrades,
                                     accuracyStr);
+                                    
+            DebugLogDashboard("STATS", 
+                             StringFormat("Trades: %d, Wins: %d, Losses: %d, Accuracy: %s",
+                                         metrics.totalDecisions, metrics.profitableDecisions,
+                                         losingTrades, accuracyStr));
         }
         else
         {
             section += " | Trades: 0 | W:0 L:0 | Win: 0.0%\n";
+            DebugLogDashboard("STATS", "No statistics available");
         }
 
         return section;
@@ -700,7 +799,10 @@ private:
     string GetCurrentPositionDirection()
     {
         if (GetPositionCount() == 0)
+        {
+            DebugLogDashboard("POSITIONS", "No positions found");
             return "NO_DIR";
+        }
 
         // Get the first position's direction
         for (int i = 0; i < PositionsTotal(); i++)
@@ -713,10 +815,14 @@ private:
 
                 if (posSymbol == m_symbol && posMagic == m_magicNumber)
                 {
-                    return (posType == POSITION_TYPE_BUY) ? "B" : "S";
+                    string direction = (posType == POSITION_TYPE_BUY) ? "B" : "S";
+                    DebugLogDashboard("POSITIONS", StringFormat("Found position: %s", direction));
+                    return direction;
                 }
             }
         }
+        
+        DebugLogDashboard("POSITIONS", "No matching positions found");
         return "NO_DIR";
     }
 
@@ -725,13 +831,18 @@ private:
         MqlDateTime dt;
         TimeToStruct(TimeCurrent(), dt);
 
+        string session;
         if (dt.hour >= 0 && dt.hour < 5)
-            return "ASIA";
-        if (dt.hour >= 5 && dt.hour < 14)
-            return "LONDON";
-        if (dt.hour >= 14 && dt.hour < 21)
-            return "US";
-        return "NIGHT";
+            session = "ASIA";
+        else if (dt.hour >= 5 && dt.hour < 14)
+            session = "LONDON";
+        else if (dt.hour >= 14 && dt.hour < 21)
+            session = "US";
+        else
+            session = "NIGHT";
+            
+        DebugLogDashboard("SESSION", StringFormat("Current session: %s (Hour: %d)", session, dt.hour));
+        return session;
     }
 
     int GetPositionCount()
@@ -750,30 +861,44 @@ private:
                 }
             }
         }
+        
+        DebugLogDashboard("POSITION_COUNT", StringFormat("Found %d positions", count));
         return count;
     }
 
     string TimeframeToString(ENUM_TIMEFRAMES tf)
     {
+        string tfStr;
         switch (tf)
         {
         case PERIOD_M1:
-            return "M1";
+            tfStr = "M1";
+            break;
         case PERIOD_M5:
-            return "M5";
+            tfStr = "M5";
+            break;
         case PERIOD_M15:
-            return "M15";
+            tfStr = "M15";
+            break;
         case PERIOD_M30:
-            return "M30";
+            tfStr = "M30";
+            break;
         case PERIOD_H1:
-            return "H1";
+            tfStr = "H1";
+            break;
         case PERIOD_H4:
-            return "H4";
+            tfStr = "H4";
+            break;
         case PERIOD_D1:
-            return "D1";
+            tfStr = "D1";
+            break;
         default:
-            return IntegerToString(tf);
+            tfStr = IntegerToString(tf);
+            break;
         }
+        
+        DebugLogDashboard("TIMEFRAME", StringFormat("Timeframe: %s", tfStr));
+        return tfStr;
     }
 
     string PadRight(string text, int length)
@@ -835,7 +960,9 @@ private:
     {
         if (StringLen(text) <= maxLength)
             return text;
-        return StringSubstr(text, 0, maxLength - 3) + "...";
+        string truncated = StringSubstr(text, 0, maxLength - 3) + "...";
+        DebugLogDashboard("TRUNCATE", StringFormat("Truncated '%s' to '%s'", text, truncated));
+        return truncated;
     }
 };
 
@@ -855,7 +982,11 @@ void ShowEnhancedDashboard(string symbol,
                                  GetPointer(decisionEngineObj)))
         {
             initialized = true;
-            Print("EnhancedDashboard initialized");
+            DebugLogDashboard("GLOBAL", "EnhancedDashboard initialized successfully");
+        }
+        else
+        {
+            DebugLogDashboard("ERROR", "Failed to initialize EnhancedDashboard");
         }
     }
 

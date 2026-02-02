@@ -42,7 +42,7 @@ struct VolumeAnalysisResult
     {
         double weightedScore;    // 0-100 weighted volume score
         double directionScore;   // -100 to +100 (negative bearish, positive bullish)
-        string recommendation;   // "BUY", "SELL", "HOLD", "CONFIRM", "AVOID"
+        string recommendation;   // "CONFIRM_BUY", "CONFIRM_SELL", "SUPPORT", "HOLD", "CAUTION", "AVOID"
         double reliabilityScore; // 0-100 how reliable this volume signal is
         bool hasStrongSignal;    // True if strong volume confirmation
         bool hasWarning;         // True if any warnings present
@@ -98,6 +98,38 @@ private:
         double penaltyOnDivergence;    // Penalty on divergence signals
         double climaxWarningThreshold; // Threshold for climax warnings
     } m_config;
+
+    // Simple debug logging using your Logger class
+    void DebugLog(string context, string message)
+    {
+        if (VOLUME_DEBUG_ENABLED)
+        {
+            Logger::Log("VOL-" + context, message);
+        }
+    }
+
+    // Log analysis summary
+    void LogAnalysisSummary(const VolumeAnalysisResult &result, ENUM_TIMEFRAMES tf)
+    {
+        if (!VOLUME_DEBUG_ENABLED)
+            return;
+
+        string tfStr = EnumToString(tf);
+
+        // Show ratio with 2 decimal places
+        string summary = StringFormat(
+            "%s: %s | Bull:%.0f Bear:%.0f | Score:%.0f Rec:%s | Ratio:%.2fx %s",
+            tfStr,
+            result.prediction,
+            result.bias.bullScore,
+            result.bias.bearScore,
+            result.volume.weightedScore,
+            result.volume.recommendation,
+            result.volumeRatio, // Now shows 0.04 instead of 1.0
+            (result.warning != "" ? "⚠️" : ""));
+
+        DebugLog("Analysis", summary);
+    }
 
 public:
     // CONSTRUCTOR
@@ -181,6 +213,7 @@ public:
         if (!m_initialized)
         {
             result.warning = "Module not initialized";
+            DebugLog("Error", "Module not initialized");
             return result;
         }
 
@@ -193,6 +226,7 @@ public:
         if (!GetPriceVolumeData(tf, lookback, fastPeriod, prices, volumes))
         {
             result.warning = "Failed to get price/volume data";
+            DebugLog("Error", "Failed to get price/volume data");
             return result;
         }
 
@@ -204,6 +238,13 @@ public:
 
         // 3. VOLUME RATIO
         result.volumeRatio = GetVolumeRatio(volumes, lookback);
+
+        if (VOLUME_DEBUG_ENABLED)
+        {
+            DebugLog("RatioCheck",
+                     StringFormat("After GetVolumeRatio: result.volumeRatio=%.2f",
+                                  result.volumeRatio));
+        }
 
         // 4. PREDICTION
         result.prediction = GetPrediction(prices, volumes, fastPeriod);
@@ -230,24 +271,20 @@ public:
         // Clean up warnings
         StringTrimRight(result.warning);
 
+        // Log warnings if any
+        if (result.warning != "")
+        {
+            DebugLog("Warning", StringFormat("%s: %s", result.prediction, result.warning));
+        }
+
         // ====== CALCULATE BIAS SCORES ======
         CalculateBiasScores(result);
 
         // ====== CALCULATE VOLUME ANALYSIS DATA ======
         CalculateVolumeData(result);
 
-        // Debug logging
-        if (VOLUME_DEBUG_ENABLED)
-        {
-            Logger::Log("VolumeModule",
-                        StringFormat("Analysis: %s | Bull:%.0f Bear:%.0f Conf:%.0f | Score:%.0f Rec:%s",
-                                     result.prediction,
-                                     result.bias.bullScore,
-                                     result.bias.bearScore,
-                                     result.bias.overallConfidence,
-                                     result.volume.weightedScore,
-                                     result.volume.recommendation));
-        }
+        // Log analysis summary
+        LogAnalysisSummary(result, tf);
 
         return result;
     }
@@ -418,9 +455,9 @@ public:
 
         if (spike && VOLUME_DEBUG_ENABLED)
         {
-            DebugLogVolume("HasSpike",
-                           StringFormat("Volume spike on %s: %.0f > %.0fx average",
-                                        EnumToString(tf), currentVol, currentVol / avgVol));
+            DebugLog("HasSpike",
+                     StringFormat("Volume spike on %s: %.0f > %.0fx average",
+                                  EnumToString(tf), currentVol, currentVol / avgVol));
         }
 
         return spike;
@@ -450,6 +487,44 @@ public:
         m_config.enableDetailedOutput = enableDetailedOutput;
         m_config.bullBiasWeight = MathMax(0, MathMin(1, bullWeight));
         m_config.bearBiasWeight = MathMax(0, MathMin(1, bearWeight));
+    }
+
+    // Quick test - minimal logging
+    void QuickTest()
+    {
+        if (!m_initialized)
+        {
+            Logger::LogError("VolumeModule", "Not initialized");
+            return;
+        }
+
+        Logger::Log("VolumeModule", "=== Quick Test Start ===");
+
+        // Test 1: Basic analysis
+        VolumeAnalysisResult result = Analyze(m_defaultTF);
+
+        // Test 2: Raw data check
+        RawVolumeData raw = GetRawVolumeData(m_defaultTF, 10);
+        Logger::Log("VolumeModule",
+                    StringFormat("Raw: Cur=%.0f Avg=%.0f (%.1fx)",
+                                 raw.currentVolume, raw.averageVolume,
+                                 raw.currentVolume / MathMax(raw.averageVolume, 1)));
+
+        // Test 3: Key metrics
+        Logger::Log("VolumeModule",
+                    StringFormat("Result: %s Score=%.0f Bias=%s Conf=%.0f%%",
+                                 result.prediction,
+                                 result.volume.weightedScore,
+                                 result.bias.primaryBias,
+                                 result.bias.overallConfidence));
+
+        // Test 4: Component data
+        ComponentData comp = GetComponentData(m_defaultTF);
+        Logger::Log("VolumeModule",
+                    StringFormat("Component: %s Str=%.0f Conf=%.0f",
+                                 comp.direction, comp.strength, comp.confidence));
+
+        Logger::Log("VolumeModule", "=== Quick Test End ===");
     }
 
     // Display volume analysis on chart
@@ -623,15 +698,6 @@ public:
 private:
     // ==================== PRIVATE HELPER METHODS ====================
 
-    // Simple debug function
-    void DebugLogVolume(string context, string message)
-    {
-        if (VOLUME_DEBUG_ENABLED)
-        {
-            Logger::Log("VOLUME-" + context, message);
-        }
-    }
-
     // Get price and volume data
     bool GetPriceVolumeData(ENUM_TIMEFRAMES tf, int lookback, int fastPeriod,
                             double &prices[], double &volumes[])
@@ -644,11 +710,111 @@ private:
 
         // Get price data
         if (CopyClose(m_symbol, tf, 0, bars, prices) < bars)
+        {
+            DebugLog("DataError", "Failed to copy price data");
             return false;
+        }
+
+        // DEBUG: Log before IndicatorManager calls
+        if (VOLUME_DEBUG_ENABLED)
+        {
+            DebugLog("DataStart",
+                     StringFormat("Getting %d bars for %s | Time[0]: %s",
+                                  bars, EnumToString(tf), TimeToString(iTime(m_symbol, tf, 0))));
+        }
 
         // Get volume data via IndicatorManager
         for (int i = 0; i < bars; i++)
-            volumes[i] = m_indicatorManager.GetVolume(tf, i);
+        {
+            double volume = m_indicatorManager.GetVolume(tf, i);
+            volumes[i] = volume;
+
+            // DEBUG: Log each call for first 3 bars
+            if (VOLUME_DEBUG_ENABLED && i < 3)
+            {
+                datetime barTime = iTime(m_symbol, tf, i);
+                DebugLog("IndicatorCall",
+                         StringFormat("GetVolume(tf=%s, shift=%d) = %.0f | Time: %s",
+                                      EnumToString(tf), i, volume, TimeToString(barTime)));
+            }
+        }
+
+        // DEBUG: Comprehensive data check
+        if (VOLUME_DEBUG_ENABLED)
+        {
+            // Log first 5 volumes with their bar times
+            string volumeInfo = "Volumes with times: ";
+            for (int i = 0; i < MathMin(5, bars); i++)
+            {
+                datetime barTime = iTime(m_symbol, tf, i);
+                volumeInfo += StringFormat("[%d]%.0f@%s ",
+                                           i, volumes[i], TimeToString(barTime, TIME_SECONDS));
+            }
+            DebugLog("VolumeData", volumeInfo);
+
+            // Log first 5 prices for correlation
+            string priceInfo = "Prices: ";
+            for (int i = 0; i < MathMin(5, bars); i++)
+            {
+                priceInfo += StringFormat("[%d]%.5f ", i, prices[i]);
+            }
+            DebugLog("PriceData", priceInfo);
+
+            // Check for stale data (identical consecutive volumes)
+            int identicalCount = 0;
+            for (int i = 1; i < MathMin(10, bars); i++)
+            {
+                if (MathAbs(volumes[i] - volumes[i - 1]) < 0.1)
+                    identicalCount++;
+            }
+
+            if (identicalCount >= 3)
+            {
+                DebugLog("DataIssue",
+                         StringFormat("WARNING: %d consecutive identical volumes!", identicalCount));
+
+                // Log the exact values that are identical
+                for (int i = 0; i < MathMin(identicalCount + 1, 6); i++)
+                {
+                    if (i < bars)
+                    {
+                        DebugLog("IdenticalCheck",
+                                 StringFormat("Volume[%d] = %.0f", i, volumes[i]));
+                    }
+                }
+            }
+
+            // Calculate and display ratio info
+            if (bars >= lookback)
+            {
+                double currentVol = volumes[0];
+                double avgVol = 0;
+                for (int i = 1; i < lookback; i++)
+                    avgVol += volumes[i];
+                avgVol /= (lookback - 1);
+
+                DebugLog("RatioCalc",
+                         StringFormat("Current=%.0f | Avg(%d)=%.0f | Ratio=%.2f",
+                                      currentVol, lookback - 1, avgVol, (avgVol > 0 ? currentVol / avgVol : 0)));
+            }
+
+            // Verify data alignment (prices and volumes same bars)
+            if (bars >= 2)
+            {
+                datetime priceTime1 = iTime(m_symbol, tf, 0);
+                datetime priceTime2 = iTime(m_symbol, tf, 1);
+                datetime volumeBarTime1 = iTime(m_symbol, tf, 0); // Should be same
+                datetime volumeBarTime2 = iTime(m_symbol, tf, 1); // Should be same
+
+                if (priceTime1 != volumeBarTime1 || priceTime2 != volumeBarTime2)
+                {
+                    DebugLog("DataError", "PRICE/VOLUME TIME MISMATCH!");
+                    DebugLog("DataError",
+                             StringFormat("PriceTimes: %s, %s | Expected same for volumes",
+                                          TimeToString(priceTime1), TimeToString(priceTime2)));
+                }
+            }
+        }
 
         return true;
     }
@@ -687,8 +853,14 @@ private:
     // 2. GET CONVICTION SCORE (0-100)
     double GetConvictionScore(const double &volume[], int lookback)
     {
-        if (ArraySize(volume) <= lookback)
+        // FIX: Changed from <= to <
+        if (ArraySize(volume) < lookback)
+        {
+            DebugLog("ConvictionError",
+                     StringFormat("Array size too small! ArraySize=%d, lookback=%d",
+                                  ArraySize(volume), lookback));
             return 50;
+        }
 
         double currentVol = volume[0];
         double avgVol = 0;
@@ -704,31 +876,77 @@ private:
         double ratio = currentVol / avgVol;
 
         // Convert ratio to 0-100 score
+        double score = GetScoreFromRatio(ratio);
+
+        if (VOLUME_DEBUG_ENABLED)
+        {
+            DebugLog("GetConvictionScore",
+                     StringFormat("Ratio=%.2f | Score=%.1f", ratio, score));
+        }
+
+        return score;
+    }
+
+    // Helper function
+    double GetScoreFromRatio(double ratio)
+    {
+        // More reasonable scoring curve
+        if (ratio >= 2.5)
+            return MathMin(100, 95 + (ratio - 2.5) * 3);
         if (ratio >= 2.0)
-            return 90 + (ratio - 2.0) * 5; // Very strong
+            return MathMin(94, 85 + (ratio - 2.0) * 10);
         if (ratio >= 1.5)
-            return 70 + (ratio - 1.5) * 40; // Strong
+            return MathMin(84, 70 + (ratio - 1.5) * 30);
+        if (ratio >= 1.2)
+            return MathMin(69, 55 + (ratio - 1.2) * 50);
         if (ratio >= 1.0)
-            return 50 + (ratio - 1.0) * 40; // Above average
-        if (ratio >= 0.7)
-            return 30 + (ratio - 0.7) * 66.67; // Below average
-        return 10 + ratio * 28.57;             // Very weak
+            return MathMin(54, 45 + (ratio - 1.0) * 45);
+        if (ratio >= 0.8)
+            return MathMin(44, 35 + (ratio - 0.8) * 45);
+        if (ratio >= 0.6)
+            return MathMin(34, 25 + (ratio - 0.6) * 50);
+        if (ratio >= 0.4)
+            return MathMin(24, 15 + (ratio - 0.4) * 45);
+        if (ratio >= 0.2)
+            return MathMin(14, 10 + (ratio - 0.2) * 20); // Less harsh drop
+        if (ratio >= 0.1)
+            return MathMin(9, 5 + (ratio - 0.1) * 40);
+        return MathMin(4, ratio * 40); // Don't drop to 0 immediately
     }
 
     // 3. GET VOLUME RATIO
     double GetVolumeRatio(const double &volume[], int lookback)
     {
-        if (ArraySize(volume) <= lookback)
+        // FIX: Changed from <= to <
+        if (ArraySize(volume) < lookback)
+        {
+            DebugLog("RatioError",
+                     StringFormat("Array size too small! ArraySize=%d, lookback=%d",
+                                  ArraySize(volume), lookback));
             return 1.0;
+        }
 
         double currentVol = volume[0];
         double avgVol = 0;
 
+        // FIX: Use lookback-1 for the loop to exclude current bar
         for (int i = 1; i < lookback; i++)
             avgVol += volume[i];
+
         avgVol /= (lookback - 1);
 
-        return (avgVol > 0) ? currentVol / avgVol : 1.0;
+        double ratio = (avgVol > 0) ? currentVol / avgVol : 1.0;
+
+        // DEBUG
+        if (VOLUME_DEBUG_ENABLED)
+        {
+            DebugLog("GetVolumeRatio-FIXED",
+                     StringFormat("ArraySize=%d, lookback=%d | Current=%.0f | Avg(%d)=%.0f | Ratio=%.2f",
+                                  ArraySize(volume), lookback,
+                                  currentVol, lookback - 1, avgVol, ratio));
+        }
+
+        return ratio;
     }
 
     // 4. GET PREDICTION
@@ -754,127 +972,174 @@ private:
     // Calculate bias scores
     void CalculateBiasScores(VolumeAnalysisResult &result)
     {
-        // Base scores from prediction
+        // Reset scores
+        result.bias.bullScore = 50;
+        result.bias.bearScore = 50;
+        result.bias.primaryBias = "NEUTRAL";
+        result.bias.isBullish = false;
+        result.bias.isBearish = false;
+
+        // Start with conviction score as base
+        double baseScore = result.convictionScore;
+
+        // Apply prediction bias - FIXED VERSION
         if (result.prediction == "BULLISH")
         {
-            result.bias.bullScore = result.convictionScore * m_config.bullBiasWeight;
-            result.bias.bearScore = 100 - result.convictionScore;
+            result.bias.bullScore = MathMin(100, baseScore + 30);       // Higher boost
+            result.bias.bearScore = MathMax(0, 30 - (baseScore * 0.3)); // Much lower
             result.bias.primaryBias = "BULLISH";
             result.bias.isBullish = true;
         }
         else if (result.prediction == "BEARISH")
         {
-            result.bias.bullScore = 100 - result.convictionScore;
-            result.bias.bearScore = result.convictionScore * m_config.bearBiasWeight;
+            result.bias.bullScore = MathMax(0, 30 - (baseScore * 0.3)); // Much lower
+            result.bias.bearScore = MathMin(100, baseScore + 30);       // Higher boost
             result.bias.primaryBias = "BEARISH";
             result.bias.isBearish = true;
         }
         else if (result.prediction == "WEAK_BULL")
         {
-            result.bias.bullScore = result.convictionScore * 0.7; // Reduced for weak signal
-            result.bias.bearScore = 50;
+            result.bias.bullScore = MathMin(100, baseScore + 15);       // Moderate boost
+            result.bias.bearScore = MathMax(0, 50 - (baseScore * 0.2)); // Moderate
             result.bias.primaryBias = "BULLISH";
             result.bias.isBullish = true;
         }
         else if (result.prediction == "WEAK_BEAR")
         {
-            result.bias.bullScore = 50;
-            result.bias.bearScore = result.convictionScore * 0.7; // Reduced for weak signal
+            result.bias.bullScore = MathMax(0, 50 - (baseScore * 0.2)); // Moderate
+            result.bias.bearScore = MathMin(100, baseScore + 15);       // Moderate boost
             result.bias.primaryBias = "BEARISH";
             result.bias.isBearish = true;
         }
-        else // NEUTRAL
-        {
-            result.bias.bullScore = 50;
-            result.bias.bearScore = 50;
-            result.bias.primaryBias = "NEUTRAL";
-        }
 
-        // Adjust based on momentum score
-        if (result.momentumScore > 0)
-        {
-            result.bias.bullScore += MathAbs(result.momentumScore) * 0.3;
-            result.bias.bearScore -= MathAbs(result.momentumScore) * 0.3;
-        }
-        else if (result.momentumScore < 0)
-        {
-            result.bias.bullScore -= MathAbs(result.momentumScore) * 0.3;
-            result.bias.bearScore += MathAbs(result.momentumScore) * 0.3;
-        }
+        // Momentum adjustment (max ±20 points)
+        double momentumAdjust = result.momentumScore * 0.2;
+        result.bias.bullScore += momentumAdjust;
+        result.bias.bearScore -= momentumAdjust;
 
-        // Apply volume spike boost
+        // Volume spike boost
         if (result.volumeRatio >= 2.0)
         {
-            result.bias.bullScore *= m_config.confidenceBoostOnSpike;
-            result.bias.bearScore *= m_config.confidenceBoostOnSpike;
+            double boost = (result.volumeRatio - 1.0) * 15;
+            if (result.bias.isBullish)
+                result.bias.bullScore = MathMin(100, result.bias.bullScore + boost);
+            else if (result.bias.isBearish)
+                result.bias.bearScore = MathMin(100, result.bias.bearScore + boost);
         }
 
-        // Apply divergence penalty
+        // Divergence penalty (reduce confidence, not bias)
         if (result.divergence)
         {
-            result.bias.bullScore *= m_config.penaltyOnDivergence;
-            result.bias.bearScore *= m_config.penaltyOnDivergence;
+            // Reduce both scores but keep the relationship
+            result.bias.bullScore *= 0.85;
+            result.bias.bearScore *= 0.85;
         }
 
-        // Calculate overall confidence
-        result.bias.overallConfidence = (result.bias.bullScore + result.bias.bearScore) / 2.0;
-
-        // Ensure scores are within bounds
+        // Ensure bounds
         result.bias.bullScore = MathMax(0, MathMin(100, result.bias.bullScore));
         result.bias.bearScore = MathMax(0, MathMin(100, result.bias.bearScore));
-        result.bias.overallConfidence = MathMax(0, MathMin(100, result.bias.overallConfidence));
+
+        // Overall confidence
+        result.bias.overallConfidence = MathMax(0, MathMin(100,
+                                                           (result.convictionScore * 0.7) + (MathMin(100, result.volumeRatio * 33) * 0.3)));
     }
 
     // Calculate volume analysis data
     void CalculateVolumeData(VolumeAnalysisResult &result)
     {
-        // Weighted score (combining multiple factors)
-        double score = 0;
+        // Start with higher base (70% conviction, 30% ratio)
+        double score = (result.convictionScore * 0.7) +
+                       (MathMin(100, result.volumeRatio * 33) * 0.3);
 
-        // Base score from conviction (40% weight)
-        score += result.convictionScore * 0.4;
+        if (VOLUME_DEBUG_ENABLED)
+        {
+            DebugLog("ScoreCalc",
+                     StringFormat("Base: Conv=%.1f*0.7=%.1f + Ratio=%.2f*33=%.1f*0.3=%.1f = %.1f",
+                                  result.convictionScore, result.convictionScore * 0.7,
+                                  result.volumeRatio, MathMin(100, result.volumeRatio * 33),
+                                  MathMin(100, result.volumeRatio * 33) * 0.3,
+                                  score));
+        }
 
-        // Momentum adjustment (30% weight)
-        if (result.momentumScore > 0)
-            score += MathAbs(result.momentumScore) * 0.3;
-        else
-            score -= MathAbs(result.momentumScore) * 0.3;
+        // Add momentum contribution (±25 max)
+        if (MathAbs(result.momentumScore) > 5)
+        {
+            if (result.momentumScore > 0)
+                score += MathMin(25, result.momentumScore * 0.4);
+            else
+                score -= MathMin(15, MathAbs(result.momentumScore) * 0.3);
+        }
 
-        // Volume ratio boost (20% weight)
-        if (result.volumeRatio > 1.0)
-            score += (result.volumeRatio - 1.0) * 20;
-        else
-            score -= (1.0 - result.volumeRatio) * 20;
+        // Volume ratio bonus/penalty (more balanced)
+        if (result.volumeRatio > 1.2)
+            score += MathMin(20, (result.volumeRatio - 1.0) * 25);
+        else if (result.volumeRatio < 0.8)
+            score -= MathMin(15, (1.0 - result.volumeRatio) * 30);
 
-        // Penalties (10% weight)
+        // Smaller penalties
         if (result.divergence)
-            score -= 15;
+            score -= 8;
         if (result.climax)
-            score -= 20;
-        if (result.warning != "")
             score -= 10;
+        if (result.warning != "")
+            score -= 3;
 
-        // Direction score (-100 to +100)
+        // FIX: Remove the 35 minimum or make it much lower
+        // score = MathMax(35, MathMin(100, score));  // OLD - REMOVE THIS
+
+        // NEW: Allow scores as low as 10 for very poor volume conditions
+        score = MathMax(10, MathMin(100, score));
+
+        // Set final scores
+        result.volume.weightedScore = score;
         result.volume.directionScore = result.momentumScore;
+        result.volume.reliabilityScore = result.convictionScore;
 
         // Determine recommendation
-        if (score >= 70 && result.bias.primaryBias == "BULLISH" && !result.divergence)
-            result.volume.recommendation = "BUY";
-        else if (score >= 70 && result.bias.primaryBias == "BEARISH" && !result.divergence)
-            result.volume.recommendation = "SELL";
-        else if (score >= 60 && result.bias.overallConfidence >= 60)
-            result.volume.recommendation = "CONFIRM";
-        else if (score <= 40 || result.divergence)
-            result.volume.recommendation = "AVOID";
-        else
+        // FIX: Adjust thresholds to match new score range
+        if (score >= 75 && result.bias.overallConfidence >= 65)
+        {
+            if (result.bias.primaryBias == "BULLISH")
+                result.volume.recommendation = "CONFIRM_BUY";
+            else if (result.bias.primaryBias == "BEARISH")
+                result.volume.recommendation = "CONFIRM_SELL";
+            else
+                result.volume.recommendation = "CONFIRM";
+        }
+        else if (score >= 60)
+        {
+            result.volume.recommendation = "SUPPORT";
+        }
+        else if (score >= 45)
+        {
             result.volume.recommendation = "HOLD";
+        }
+        else if (score >= 25) // Lowered from 35 to 25
+        {
+            result.volume.recommendation = "CAUTION";
+        }
+        else if (score >= 15) // New threshold for very weak
+        {
+            result.volume.recommendation = "WEAK";
+        }
+        else
+        {
+            result.volume.recommendation = "AVOID";
+        }
 
-        // Set strong signal flag
-        result.volume.hasStrongSignal = (score >= 70 && !result.divergence);
+        if (VOLUME_DEBUG_ENABLED)
+        {
+            DebugLog("ScoreFinal",
+                     StringFormat("Final score: %.1f | Recommendation: %s",
+                                  score, result.volume.recommendation));
+        }
+
+        // Set flags
+        result.volume.hasStrongSignal = (score >= 70 && result.bias.overallConfidence >= 60);
         result.volume.hasWarning = (result.warning != "" || result.divergence || result.climax);
 
-        // Set volume context
-        if (result.volumeRatio >= m_config.climaxWarningThreshold)
+        // Set context
+        if (result.volumeRatio >= 3.0)
             result.volume.volumeContext = "EXTREME_SPIKE";
         else if (result.volumeRatio >= 2.0)
             result.volume.volumeContext = "SPIKE";
@@ -882,12 +1147,12 @@ private:
             result.volume.volumeContext = "CLIMAX";
         else if (result.divergence)
             result.volume.volumeContext = "DIVERGENCE";
+        else if (result.volumeRatio >= 1.3)
+            result.volume.volumeContext = "ABOVE_AVERAGE";
+        else if (result.volumeRatio <= 0.7)
+            result.volume.volumeContext = "BELOW_AVERAGE";
         else
             result.volume.volumeContext = "NORMAL";
-
-        // Final weighted score
-        result.volume.weightedScore = MathMax(0, MathMin(100, score));
-        result.volume.reliabilityScore = result.convictionScore;
     }
 
     // Get simple direction string
@@ -906,11 +1171,16 @@ private:
         if (ArraySize(price) <= period || ArraySize(volume) <= period)
             return false;
 
-        // Bullish divergence: Price lower, volume higher
-        bool bullDiv = (price[0] < price[period]) && (volume[0] > volume[period] * 1.2);
+        // Require minimum price movement (0.5%)
+        double priceChange = MathAbs((price[0] - price[period]) / price[period]) * 100;
+        if (priceChange < 0.5)
+            return false;
 
-        // Bearish divergence: Price higher, volume lower
-        bool bearDiv = (price[0] > price[period]) && (volume[0] < volume[period] * 0.8);
+        // Bullish divergence: Price lower, volume significantly higher
+        bool bullDiv = (price[0] < price[period]) && (volume[0] > volume[period] * 1.3); // 1.3x instead of 1.2x
+
+        // Bearish divergence: Price higher, volume significantly lower
+        bool bearDiv = (price[0] > price[period]) && (volume[0] < volume[period] * 0.7); // 0.7x instead of 0.8x
 
         return bullDiv || bearDiv;
     }

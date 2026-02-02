@@ -15,7 +15,7 @@
 #include "../Data/IndicatorManager.mqh" // INCLUDE THE ACTUAL INDICATOR MANAGER
 
 // ====================== DEBUG SETTINGS ======================
-bool DEBUG_TRAP_ENABLED = true;
+bool DEBUG_TRAP_ENABLED = false;
 
 // Simple debug function using Logger
 void DebugTrapLogs(string context, string message)

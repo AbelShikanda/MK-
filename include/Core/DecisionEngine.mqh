@@ -41,11 +41,12 @@ Core Improvements:
 bool DEBUG_ENABLED = true;
 
 // Simple debug function using Logger
-void DebugLogFile(string context, string message)
+void DebugLogFile(string context, string message, 
+                  bool logToFile = true, bool logToConsole = true)
 {
     if (DEBUG_ENABLED)
     {
-        Logger::Log(context, message, true, true);
+        Logger::Log(context, message, logToFile, logToConsole);
     }
 }
 
@@ -658,7 +659,7 @@ public:
         }
 
         // Get market regime for this symbol
-        MarketAnalysis regime = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
+        MarketAnalysis regime = GetMarketRegimeAnalysis(symbol, PERIOD_M15);
 
         // Apply regime adaptation
         DecisionParams adaptedParams = CreateRegimeBasedParams(regime, params);
@@ -730,7 +731,7 @@ public:
         DecisionParams mkParams = CreateMKParams(maxRiskPerTrade, positionCooldownMinutes);
 
         // 2. Get current market regime
-        MarketAnalysis regime = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
+        MarketAnalysis regime = GetMarketRegimeAnalysis(symbol, PERIOD_M15);
 
         // 3. Adapt mk$ profile to current regime
         DecisionParams finalParams = CreateRegimeBasedParams(regime, mkParams);
@@ -822,7 +823,7 @@ public:
         DebugLogFile("PACKAGE_CREATION", "Symbol: " + symbol);
 
         // ========== STEP 1: GET MARKET REGIME ANALYSIS ==========
-        MarketAnalysis regimeAnalysis = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
+        MarketAnalysis regimeAnalysis = GetMarketRegimeAnalysis(symbol, PERIOD_M15);
 
         DebugLogFile("MARKET_REGIME_ANALYSIS",
                      StringFormat("Market Regime: %s | State: %s | Confidence: %.0f%%",
@@ -988,7 +989,7 @@ public:
                                        timestamp, symbol, processorType, decisionStr, status);
 
         DebugLogFile("PACKAGE_RESULT", logEntry);
-        Logger::Log("PACKAGE_PROCESSING", logEntry, true, true);
+        DebugLogFile("PACKAGE_PROCESSING", logEntry, true, true);
     }
 
     string TimeframeToString(ENUM_TIMEFRAMES tf)
@@ -1098,7 +1099,7 @@ public:
         // ============ STEP 3: GET CURRENT MARKET REGIME (FOR MONITORING ONLY) ============
         DebugLogFile("MARKET_MONITOR", "--- GETTING CURRENT MARKET REGIME (MONITORING ONLY) ---");
 
-        MarketAnalysis currentRegime = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
+        MarketAnalysis currentRegime = GetMarketRegimeAnalysis(symbol, PERIOD_M15);
 
         DebugLogFile("CURRENT_REGIME", StringFormat("Current Market: Root=%s, State=%s, Conf=%.0f%%",
                                                     currentRegime.GetRootStateString(currentRegime.rootState),
@@ -1428,7 +1429,7 @@ public:
 
         // ============ STEP 1: GET MARKET REGIME FOR MONITORING ONLY ============
         DebugLogFile("MARKET_MONITOR", "--- Getting current market (MONITORING ONLY) ---");
-        MarketAnalysis currentMarket = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
+        MarketAnalysis currentMarket = GetMarketRegimeAnalysis(symbol, PERIOD_M15);
 
         // PURE MONITORING - no rejection
         bool marketIsTrending = currentMarket.IsTrending();
@@ -1573,7 +1574,7 @@ public:
 
         // ============ STEP 1: GET CURRENT MARKET FOR MONITORING ============
         DebugLogFile("MARKET_MONITOR", "--- Getting current market (MONITORING ONLY) ---");
-        MarketAnalysis currentMarket = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
+        MarketAnalysis currentMarket = GetMarketRegimeAnalysis(symbol, PERIOD_M15);
 
         // PURE MONITORING - no rejection
         bool marketIsRanging = currentMarket.IsRanging();
@@ -2128,7 +2129,7 @@ public:
     // Get current market regime as string
     string GetCurrentMarketRegimeString(string symbol)
     {
-        MarketAnalysis analysis = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
+        MarketAnalysis analysis = GetMarketRegimeAnalysis(symbol, PERIOD_M15);
         return analysis.ToString();
     }
 
@@ -2550,9 +2551,9 @@ private:
     }
 
     // Get market regime analysis
-    MarketAnalysis GetMarketRegimeAnalysis(string symbol, ENUM_TIMEFRAMES timeframe = PERIOD_H1)
+    MarketAnalysis GetMarketRegimeAnalysis(string symbol, ENUM_TIMEFRAMES timeframe = PERIOD_M15)
     {
-        MarketRegimeDetector detector(symbol, timeframe);
+        MarketRegimeDetector* detector = MarketRegimeDetector::Instance(symbol, timeframe);
         return detector.GetMarketRegime();
     }
 
@@ -2684,35 +2685,35 @@ private:
     // Get root state for decision making
     ENUM_ROOT_REGIME GetRootRegimeForSymbol(string symbol)
     {
-        MarketAnalysis analysis = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
+        MarketAnalysis analysis = GetMarketRegimeAnalysis(symbol, PERIOD_M15);
         return analysis.rootState;
     }
 
     // Get market state for decision making
     ENUM_MARKET_STATE GetMarketStateForSymbol(string symbol)
     {
-        MarketAnalysis analysis = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
+        MarketAnalysis analysis = GetMarketRegimeAnalysis(symbol, PERIOD_M15);
         return analysis.state;
     }
 
     // Get position size recommendation based on market regime
     ENUM_POSITION_SIZE GetRecommendedPositionSize(string symbol)
     {
-        MarketAnalysis analysis = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
+        MarketAnalysis analysis = GetMarketRegimeAnalysis(symbol, PERIOD_M15);
         return analysis.positionSize;
     }
 
     // Get stop distance based on market regime
     double GetRecommendedStopDistance(string symbol)
     {
-        MarketAnalysis analysis = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
+        MarketAnalysis analysis = GetMarketRegimeAnalysis(symbol, PERIOD_M15);
         return analysis.stopDistance;
     }
 
     // Get TP distance based on market regime
     double GetRecommendedTakeProfitDistance(string symbol)
     {
-        MarketAnalysis analysis = GetMarketRegimeAnalysis(symbol, PERIOD_H1);
+        MarketAnalysis analysis = GetMarketRegimeAnalysis(symbol, PERIOD_M15);
         return analysis.takeProfitDistance;
     }
 
@@ -3318,7 +3319,7 @@ private:
     void LogInfo(string message)
     {
         DebugLogFile("INFO", message);
-        Logger::Log(m_engineName, message, true, true);
+        DebugLogFile(m_engineName, message, true, true);
     }
 
     void LogWarning(string message)
@@ -3338,7 +3339,7 @@ private:
         if (m_debugEnabled)
         {
             DebugLogFile("DEBUG", message);
-            Logger::Log("DEBUG-" + m_engineName, message, true, true);
+            DebugLogFile("DEBUG-" + m_engineName, message, true, true);
         }
     }
 

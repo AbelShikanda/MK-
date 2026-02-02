@@ -312,7 +312,7 @@ public:
         m_lastSignal = POIModuleSignal();
         m_lastSignalTime = 0;
 
-        // Initialize IndicatorManager
+        // ✅ Initialize IndicatorManager pointer (will be set in Initialize)
         m_indicatorManager = NULL;
     }
 
@@ -336,15 +336,28 @@ public:
         m_maxDisplayZones = maxDisplayZones;
         m_displayMode = displayMode;
 
-        // Initialize IndicatorManager
-        m_indicatorManager = new IndicatorManager(m_symbol);
-        if (m_indicatorManager == NULL || !m_indicatorManager.Initialize())
+        // ✅ USE SINGLETON INSTANCE instead of creating new
+        m_indicatorManager = IndicatorManager::Instance();
+
+        if (m_indicatorManager == NULL)
         {
-            DebugLogPOI("POIModule", "Failed to initialize IndicatorManager");
+            DebugLogPOI("POIModule", "❌ Failed to get IndicatorManager singleton");
             return false;
         }
 
-        // Get current ATR using IndicatorManager
+        // ✅ Ensure singleton is initialized
+        if (!m_indicatorManager.IsInitialized())
+        {
+            DebugLogPOI("POIModule", "⚠️ IndicatorManager singleton not initialized, initializing now...");
+            if (!m_indicatorManager.Initialize())
+            {
+                DebugLogPOI("POIModule", "❌ Failed to initialize IndicatorManager singleton");
+                m_indicatorManager = NULL;
+                return false;
+            }
+        }
+
+        // Get current ATR using IndicatorManager singleton
         m_currentATR = m_indicatorManager.GetATR(PERIOD_M15, 0);
         if (m_currentATR <= 0)
         {

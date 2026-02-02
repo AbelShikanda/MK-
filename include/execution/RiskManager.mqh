@@ -49,39 +49,6 @@ struct PriceStructure
     datetime timeLow;
 };
 
-// ==================== GLOBAL INSTANCES ====================
-IndicatorManager *globalIndManager = NULL;
-
-// ==================== INITIALIZATION FUNCTIONS ====================
-void InitializeRiskCalculator(string symbol = NULL)
-{
-    if (globalIndManager == NULL)
-    {
-        globalIndManager = new IndicatorManager(symbol);
-        if (globalIndManager.Initialize())
-        {
-            RiskDebugLog("RISK-INIT", "✅ IndicatorManager initialized successfully");
-        }
-        else
-        {
-            RiskDebugLog("RISK-INIT", "❌ Failed to initialize IndicatorManager");
-            delete globalIndManager;
-            globalIndManager = NULL;
-        }
-    }
-}
-
-void DeinitializeRiskCalculator()
-{
-    if (globalIndManager != NULL)
-    {
-        globalIndManager.Deinitialize();
-        delete globalIndManager;
-        globalIndManager = NULL;
-        RiskDebugLog("RISK-INIT", "✅ IndicatorManager deinitialized");
-    }
-}
-
 // ==================== HELPER FUNCTIONS ====================
 string TimeframeToString(ENUM_TIMEFRAMES tf)
 {
@@ -251,7 +218,6 @@ double FindRecentSwingHigh(string symbol, ENUM_TIMEFRAMES timeframe, int lookbac
 // ==================== RISK CALCULATOR NAMESPACE ====================
 namespace RiskCalculator
 {
-
     // ==================== RISK VALIDATION ====================
     bool CanOpenTrade(double maxDailyLossPercent = 5.0, double maxDrawdownPercent = 20.0)
     {
@@ -326,12 +292,28 @@ namespace RiskCalculator
                              double atrMultiplier = 2.0,
                              ENUM_TIMEFRAMES timeframe = PERIOD_M15)
     {
-
         RiskDebugLog("RISK-SL", StringFormat("===== CALCULATE STOP LOSS START =====", ""));
         RiskDebugLog("RISK-SL", StringFormat("Parameters: Symbol=%s, IsBuy=%s, Entry=%.5f, ATRMultiplier=%.1f, Timeframe=%s",
                                              symbol, isBuy ? "BUY" : "SELL", entryPrice, atrMultiplier, TimeframeToString(timeframe)));
 
-        static IndicatorManager indManager(symbol);
+        // ✅ USE SINGLETON
+        IndicatorManager* indManager = IndicatorManager::Instance();
+        if (indManager == NULL)
+        {
+            RiskDebugLog("RISK-SL", "❌ Failed to get IndicatorManager singleton");
+            return 0.0;
+        }
+
+        // Ensure singleton is initialized
+        if (!indManager.IsInitialized())
+        {
+            RiskDebugLog("RISK-SL", "⚠️ IndicatorManager not initialized, initializing now...");
+            if (!indManager.Initialize())
+            {
+                RiskDebugLog("RISK-SL", "❌ Failed to initialize IndicatorManager singleton");
+                return 0.0;
+            }
+        }
 
         double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
         int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
@@ -348,7 +330,6 @@ namespace RiskCalculator
             symbol == "BTCUSD" || symbol == "ETHUSD" ||
             StringFind(symbol, "BTC") >= 0 || StringFind(symbol, "ETH") >= 0)
         {
-
             RiskDebugLog("RISK-SL", "Volatile symbol detected");
             if (timeframe < PERIOD_M15)
             {
@@ -370,7 +351,7 @@ namespace RiskCalculator
         RiskDebugLog("RISK-SL", StringFormat("Final timeframe for calculations: %s",
                                              TimeframeToString(atrTimeframe)));
 
-        // Get ATR value with detailed logging
+        // ✅ Get ATR from singleton
         double atrValue = indManager.GetATR(atrTimeframe, 0);
         RiskDebugLog("RISK-SL", StringFormat("ATR Value: %.5f (%.1f pips)", atrValue, atrValue / point));
 
@@ -540,8 +521,6 @@ namespace RiskCalculator
         }
 
         // Convert pips to points
-        // For forex: 1 pip = 10 points (usually)
-        // For XAUUSD: 1 pip = 10 points (since point = 0.01)
         double pipSize = 10 * point; // Standard: 1 pip = 10 points
 
         double minDistance = minDistancePips * pipSize;
@@ -607,7 +586,6 @@ namespace RiskCalculator
     double CalculateTakeProfit(string symbol, bool isBuy, double entryPrice,
                                double stopLoss, double rrRatio = 1.5)
     {
-
         RiskDebugLog("RISK-TP", StringFormat("=== CALCULATING TAKE PROFIT === | Symbol: %s | %s @ %.5f | SL: %.5f | RR: %.1f",
                                              symbol, isBuy ? "BUY" : "SELL", entryPrice, stopLoss, rrRatio));
 
@@ -631,19 +609,15 @@ namespace RiskCalculator
         double normalizedPrice = NormalizePrice(symbol, tpPrice);
         RiskDebugLog("RISK-TP-DEBUG", StringFormat("=== PROFIT === | NormalizedPrice: %.5f | SL: %.5f | RR: %.1f", normalizedPrice, stopLoss, rrRatio));
 
-        // ExpertRemove();
-
         return normalizedPrice;
     }
 
     // ==================== STRUCTURAL TRAILING STOP CALCULATION ====================
-    // REPLACING THE OLD CalculateTrailingStop FUNCTION
     double CalculateTrailingStop(string symbol, bool isBuy, double entryPrice,
                                  double currentPrice, double currentSL,
                                  ENUM_TRAIL_METHOD method = TRAIL_STRUCTURE,
                                  ENUM_TIMEFRAMES timeframe = PERIOD_M15)
     {
-
         RiskDebugLog("RISK-TRAIL", StringFormat("=== STRUCTURAL TRAILING STOP === | Symbol: %s | %s | Entry: %.5f | Current: %.5f | Current SL: %.5f | TF: %s",
                                                 symbol, isBuy ? "BUY" : "SELL", entryPrice, currentPrice, currentSL, TimeframeToString(timeframe)));
 
@@ -805,13 +779,26 @@ namespace RiskCalculator
     {
         RiskDebugLog("RISK-MARKET-LEVEL", StringFormat("Getting market risk level for %s (TF: %d)...", symbol, timeframe));
 
-        IndicatorManager indManager(symbol);
-        if (!indManager.Initialize())
+        // ✅ USE SINGLETON
+        IndicatorManager* indManager = IndicatorManager::Instance();
+        if (indManager == NULL)
         {
-            RiskDebugLog("RISK-MARKET-LEVEL", "❌ Failed to initialize IndicatorManager");
+            RiskDebugLog("RISK-MARKET-LEVEL", "❌ Failed to get IndicatorManager singleton");
             return RISK_MODERATE;
         }
 
+        // Ensure singleton is initialized
+        if (!indManager.IsInitialized())
+        {
+            RiskDebugLog("RISK-MARKET-LEVEL", "⚠️ IndicatorManager not initialized, initializing now...");
+            if (!indManager.Initialize())
+            {
+                RiskDebugLog("RISK-MARKET-LEVEL", "❌ Failed to initialize IndicatorManager singleton");
+                return RISK_MODERATE;
+            }
+        }
+
+        // ✅ Get indicator values from singleton
         double atr = indManager.GetATR(timeframe, 0);
         double adx, plus_di, minus_di;
         indManager.GetADXValues(timeframe, adx, plus_di, minus_di, 0);
@@ -850,22 +837,40 @@ namespace RiskCalculator
         RiskDebugLog("RISK-ATR", StringFormat("Getting ATR for %s on TF %s shift %d...",
                                               symbol, TimeframeToString(timeframe), shift));
 
-        if (globalIndManager != NULL)
+        // ✅ USE SINGLETON
+        IndicatorManager* im = IndicatorManager::Instance();
+        if (im == NULL)
         {
-            double atrValue = globalIndManager.GetATR(timeframe, shift);
-            RiskDebugLog("RISK-ATR", StringFormat("ATR from global instance: %.5f (%.1f pips)",
-                                                  atrValue, atrValue / SymbolInfoDouble(symbol, SYMBOL_POINT)));
-            return atrValue;
-        }
-
-        IndicatorManager indManager(symbol);
-        if (!indManager.Initialize())
-        {
-            RiskDebugLog("RISK-ATR", "❌ Failed to initialize IndicatorManager");
+            RiskDebugLog("RISK-ATR", "❌ Failed to get IndicatorManager singleton");
             return 0.0;
         }
 
-        double atrValue = indManager.GetATR(timeframe, shift);
+        // Ensure singleton is initialized
+        if (!im.IsInitialized())
+        {
+            RiskDebugLog("RISK-ATR", "⚠️ IndicatorManager not initialized, initializing now...");
+            if (!im.Initialize())
+            {
+                RiskDebugLog("RISK-ATR", "❌ Failed to initialize IndicatorManager singleton");
+                return 0.0;
+            }
+        }
+
+        double atrValue = im.GetATR(timeframe, shift);
+        
+        if (atrValue <= 0)
+        {
+            RiskDebugLog("RISK-ATR", "⚠️ ATR value is 0 or negative, using default calculation");
+            
+            // Fallback calculation
+            double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+            
+            if (StringFind(symbol, "XAU") >= 0 || StringFind(symbol, "GOLD") >= 0)
+                atrValue = 10.0 * point; // Default Gold ATR
+            else
+                atrValue = 0.0005; // Default Forex ATR (5 pips)
+        }
+
         RiskDebugLog("RISK-ATR", StringFormat("ATR value: %.5f (%.1f pips)",
                                               atrValue, atrValue / SymbolInfoDouble(symbol, SYMBOL_POINT)));
         return atrValue;
@@ -875,15 +880,28 @@ namespace RiskCalculator
     {
         RiskDebugLog("RISK-CONFIDENCE", StringFormat("Getting market confidence for %s (TF: %d)...", symbol, timeframe));
 
-        IndicatorManager indManager(symbol);
-        if (!indManager.Initialize())
+        // ✅ USE SINGLETON
+        IndicatorManager* indManager = IndicatorManager::Instance();
+        if (indManager == NULL)
         {
-            RiskDebugLog("RISK-CONFIDENCE", "❌ Failed to initialize IndicatorManager");
+            RiskDebugLog("RISK-CONFIDENCE", "❌ Failed to get IndicatorManager singleton");
             return 50.0;
+        }
+
+        // Ensure singleton is initialized
+        if (!indManager.IsInitialized())
+        {
+            RiskDebugLog("RISK-CONFIDENCE", "⚠️ IndicatorManager not initialized, initializing now...");
+            if (!indManager.Initialize())
+            {
+                RiskDebugLog("RISK-CONFIDENCE", "❌ Failed to initialize IndicatorManager singleton");
+                return 50.0;
+            }
         }
 
         double confidence = 50.0;
 
+        // ✅ Get indicator values from singleton
         double adx, plus_di, minus_di;
         indManager.GetADXValues(timeframe, adx, plus_di, minus_di, 0);
         if (adx > 25)

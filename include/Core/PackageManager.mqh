@@ -399,9 +399,8 @@ public:
         package.signal.timestamp = TimeCurrent();
         package.signal.signalSource = "6-Component PackageManager";
         
-        // Set default weights for 6 components (weights come from TrendPackage class)
-        // Using default weights: MTF=25, POI=20, VOL=15, RSI=15, MACD=15, PAT=10
-        package.SetComponentWeights(25.0, 20.0, 15.0, 15.0, 15.0, 10.0);
+        // Using default weights: MTF=25, POI=20, VOL=20, RSI=15, MACD=10, PAT=10
+        package.SetComponentWeights(25.0, 20.0, 20.0, 15.0, 10.0, 10.0);
         
         // ==================== POPULATE FROM ALL 6 MODULES ====================
         

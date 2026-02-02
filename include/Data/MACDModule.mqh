@@ -276,7 +276,12 @@ private:
     // Indicator Manager (integrated with your IndicatorManager)
     IndicatorManager* m_indicatorManager;
     
+    // ========== SINGLETON PATTERN ==========
+    static MACDModule* m_instance;  // Static instance pointer
+    
 public:
+    
+    // Private constructor for singleton
     MACDModule()
     {
         m_symbol = "";
@@ -285,16 +290,82 @@ public:
         m_lastSignal = MACDSignal();
         m_lastSignalTime = 0;
         m_indicatorManager = NULL;
+        
+        DebugLogMACD("MACDModule", "Singleton instance created");
     }
+    
+    // Private copy constructor and assignment operator
+    MACDModule(const MACDModule&) = delete;
+    void operator=(const MACDModule&) = delete;
     
     ~MACDModule()
     {
         Deinitialize();
     }
     
-public:
-    // Initialize with specific timeframe
-    bool Initialize(string symbol, ENUM_TIMEFRAMES timeframe = PERIOD_M15) 
+    // ========== SINGLETON ACCESS METHODS ==========
+    
+    // Get singleton instance with specific symbol and timeframe
+    static MACDModule* Instance(string symbol = NULL, ENUM_TIMEFRAMES timeframe = PERIOD_M15)
+    {
+        if (m_instance == NULL)
+        {
+            DebugLogMACD("MACDModule", "Creating new singleton instance");
+            m_instance = new MACDModule();
+            
+            // Initialize with default or provided parameters
+            if (symbol == NULL || symbol == "")
+            {
+                symbol = Symbol();
+            }
+            
+            if (!m_instance.Initialize(symbol, timeframe))
+            {
+                DebugLogMACD("MACDModule", "Failed to initialize singleton instance");
+                delete m_instance;
+                m_instance = NULL;
+                return NULL;
+            }
+        }
+        else if (symbol != NULL && symbol != "" && m_instance.m_symbol != symbol)
+        {
+            // Warning if trying to change symbol on existing instance
+            DebugLogMACD("MACDModule", 
+                StringFormat("WARNING: MACDModule singleton already exists for symbol %s. Cannot change to %s",
+                m_instance.m_symbol, symbol));
+        }
+        else if (timeframe != m_instance.m_timeframe)
+        {
+            // Update timeframe if different
+            DebugLogMACD("MACDModule", 
+                StringFormat("Updating timeframe from %d to %d", 
+                m_instance.m_timeframe, timeframe));
+            m_instance.m_timeframe = timeframe;
+        }
+        
+        return m_instance;
+    }
+    
+    // Get singleton instance without parameters (uses existing instance)
+    static MACDModule* GetInstance()
+    {
+        return Instance(NULL, PERIOD_M15);
+    }
+    
+    // Destroy singleton instance
+    static void DestroyInstance()
+    {
+        if (m_instance != NULL)
+        {
+            delete m_instance;
+            m_instance = NULL;
+            DebugLogMACD("MACDModule", "Singleton instance destroyed");
+        }
+    }
+
+    // ========== INITIALIZATION ==========
+    // Private initialize method (called from Instance)
+    bool Initialize(string symbol, ENUM_TIMEFRAMES timeframe) 
     {
         if(m_initialized) return true;
         
@@ -306,47 +377,88 @@ public:
             Logger::Initialize("MACD_Module.log", true, true);
         }
         
-        // Initialize IndicatorManager using your provided class
-        m_indicatorManager = new IndicatorManager(m_symbol);
-        if(m_indicatorManager == NULL || !m_indicatorManager.Initialize()) {
-            Logger::LogError("MACDModule", "Failed to initialize IndicatorManager");
+        // Initialize IndicatorManager using singleton
+        m_indicatorManager = IndicatorManager::Instance(m_symbol);
+        if(m_indicatorManager == NULL) {
+            DebugLogMACD("MACDModule", "Failed to get IndicatorManager singleton");
             return false;
         }
         
+        // Ensure IndicatorManager is initialized
+        if (!m_indicatorManager.IsInitialized())
+        {
+            if (!m_indicatorManager.Initialize())
+            {
+                DebugLogMACD("MACDModule", "Failed to initialize IndicatorManager");
+                return false;
+            }
+        }
+        
         m_initialized = true;
-        Logger::Log("MACDModule", StringFormat("Initialized for %s on timeframe %d", 
-            m_symbol, m_timeframe));
+        DebugLogMACD("MACDModule", 
+            StringFormat("Initialized for %s on timeframe %s", 
+            m_symbol, GetTimeframeName(m_timeframe)));
         return true;
+    }
+    
+private:
+    
+    // Helper to get timeframe name
+    string GetTimeframeName(ENUM_TIMEFRAMES tf)
+    {
+        switch(tf)
+        {
+            case PERIOD_M1: return "M1";
+            case PERIOD_M5: return "M5";
+            case PERIOD_M15: return "M15";
+            case PERIOD_M30: return "M30";
+            case PERIOD_H1: return "H1";
+            case PERIOD_H4: return "H4";
+            case PERIOD_D1: return "D1";
+            case PERIOD_W1: return "W1";
+            case PERIOD_MN1: return "MN1";
+            default: return IntegerToString(tf);
+        }
+    }
+    
+public:
+    // ==================== PUBLIC INTERFACE ====================
+    
+    // Initialize instance with specific parameters (alternative to Instance method)
+    bool InitializeInstance(string symbol, ENUM_TIMEFRAMES timeframe = PERIOD_M15)
+    {
+        if (m_instance == NULL)
+        {
+            m_instance = new MACDModule();
+        }
+        
+        return m_instance.Initialize(symbol, timeframe);
     }
     
     void Deinitialize()
     {
         if(!m_initialized) return;
         
-        // Deinitialize IndicatorManager
-        if(m_indicatorManager != NULL) {
-            m_indicatorManager.Deinitialize();
-            delete m_indicatorManager;
-            m_indicatorManager = NULL;
-        }
+        // Note: We don't delete the IndicatorManager since it's a singleton
+        // Let the IndicatorManager manage its own lifecycle
         
         m_initialized = false;
-        Logger::Log("MACDModule", "Deinitialized");
+        DebugLogMACD("MACDModule", "Deinitialized");
     }
     
-    // ==================== PUBLIC INTERFACE ====================
+    // ==================== PUBLIC METHODS ====================
     
     // Get complete MACD signal (MAIN METHOD)
     MACDSignal GetMACDSignal() 
     {
         if(!m_initialized) {
-            Logger::LogError("GetMACDSignal", "Module not initialized");
+            DebugLogMACD("GetMACDSignal", "Module not initialized");
             return m_lastSignal;
         }
         
         // Check if market is open using integrated TimeUtils
         if(!TimeUtils::IsMarketOpen(m_symbol)) {
-            Logger::Log("GetMACDSignal", "Market is closed - using cached signal");
+            DebugLogMACD("GetMACDSignal", "Market is closed - using cached signal");
             return m_lastSignal;
         }
         
@@ -355,7 +467,7 @@ public:
             return m_lastSignal;
         }
         
-        Logger::Log("GetMACDSignal", "Generating new MACD signal");
+        DebugLogMACD("GetMACDSignal", "Generating new MACD signal");
         
         // Generate new signal
         MACDSignal signal;
@@ -365,7 +477,7 @@ public:
         // Get MACD values using integrated IndicatorManager
         double macdMain, macdSignal;
         if(!GetMACDValues(macdMain, macdSignal, signal.histogramValue, 0)) {
-            Logger::LogError("GetMACDSignal", "Failed to get MACD values");
+            DebugLogMACD("GetMACDSignal", "Failed to get MACD values");
             return signal;
         }
         
@@ -568,11 +680,13 @@ public:
         
         if(signal.confidence > 80) {
             adjustedRisk *= 1.5;
-            Logger::Log("PositionSizing", StringFormat("High confidence (%.0f%%) - increasing risk to %.1f%%", 
+            DebugLogMACD("PositionSizing", 
+                StringFormat("High confidence (%.0f%%) - increasing risk to %.1f%%", 
                 signal.confidence, adjustedRisk));
         } else if(signal.confidence < 50) {
             adjustedRisk *= 0.5;
-            Logger::Log("PositionSizing", StringFormat("Low confidence (%.0f%%) - reducing risk to %.1f%%", 
+            DebugLogMACD("PositionSizing", 
+                StringFormat("Low confidence (%.0f%%) - reducing risk to %.1f%%", 
                 signal.confidence, adjustedRisk));
         }
         
@@ -583,7 +697,7 @@ public:
         double positionSize = m_indicatorManager.CalculatePositionSize(adjustedRisk, stopLossPips, m_timeframe);
         
         // Log position size calculation
-        Logger::Log("PositionSizing", StringFormat(
+        DebugLogMACD("PositionSizing", StringFormat(
             "Symbol: %s, Entry: %.5f, SL: %.5f, Risk: %.1f%%, Size: %.2f lots",
             m_symbol, entryPrice, stopLoss, adjustedRisk, positionSize
         ));
@@ -597,7 +711,8 @@ public:
         double atr = m_indicatorManager.GetATR(m_timeframe, 0);
         double stopLoss = atr * multiplier;
         
-        Logger::Log("StopLoss", StringFormat("ATR Stop Loss: %.5f (ATR: %.5f * %.1f)", 
+        DebugLogMACD("StopLoss", 
+            StringFormat("ATR Stop Loss: %.5f (ATR: %.5f * %.1f)", 
             stopLoss, atr, multiplier));
         
         return stopLoss;
@@ -620,6 +735,12 @@ public:
     
     // Get last generated signal
     MACDSignal GetLastSignal() const { return m_lastSignal; }
+    
+    // Get current symbol
+    string GetSymbol() const { return m_symbol; }
+    
+    // Get current timeframe
+    ENUM_TIMEFRAMES GetTimeframe() const { return m_timeframe; }
     
     // Get current market session info using TimeUtils
     string GetMarketSessionInfo() 
@@ -753,18 +874,18 @@ private:
     {
         string action = signal.IsActionable() ? "ACTIONABLE" : "MONITOR";
         
-        Logger::Log("MACD_Signal", StringFormat(
+        DebugLogMACD("MACD_Signal", StringFormat(
             "%s | %s | Score: %.0f | Conf: %.0f%% | %s | Hist: %.4f",
             m_symbol, signal.biasString, signal.score, signal.confidence,
             action, signal.histogramValue
         ));
         
         if(signal.isCrossover) {
-            Logger::Log("MACD_Event", StringFormat("%s CROSSOVER detected", m_symbol));
+            DebugLogMACD("MACD_Event", StringFormat("%s CROSSOVER detected", m_symbol));
         }
         
         if(signal.isDivergence) {
-            Logger::Log("MACD_Event", StringFormat("%s DIVERGENCE detected", m_symbol));
+            DebugLogMACD("MACD_Event", StringFormat("%s DIVERGENCE detected", m_symbol));
         }
     }
     
@@ -806,7 +927,7 @@ private:
         GetMultiTimeframeConfirmation(bullish_tf_count, bearish_tf_count);
         
         // Log indicator confirmations
-        Logger::Log("IndicatorConfirmations", StringFormat(
+        DebugLogMACD("IndicatorConfirmations", StringFormat(
             "RSI: %.1f, ADX: %.1f, Bullish TFs: %d, Bearish TFs: %d",
             rsi, adx, bullish_tf_count, bearish_tf_count
         ));
@@ -1247,5 +1368,8 @@ private:
         return ratio * 100.0;
     }
 };
+
+// Initialize static instance pointer
+MACDModule* MACDModule::m_instance = NULL;
 
 //+------------------------------------------------------------------+

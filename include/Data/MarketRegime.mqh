@@ -3,7 +3,7 @@
 //|             Simplified Market Regime & Lifecycle Detection       |
 //+------------------------------------------------------------------+
 // Logger Integration Status: FULLY INTEGRATED
-// All logging uses static Logger::Log() calls with debug wrapper
+// All logging uses static DebugRegimeLogFile() calls with debug wrapper
 //+------------------------------------------------------------------+
 
 #property copyright "Copyright 2024"
@@ -24,7 +24,7 @@ input double Inp_ADX_Trend_Confirmation = 20.0;                                 
 input double Inp_ADX_Exhaustion = 40.0;                                                                // ADX exhaustion level (overbought/oversold)
 input double Inp_ADX_Contraction = 15.0;                                                               // ADX contraction (range) level
 
-input group "=== Price & Moving Average Settings ===" input double Inp_Price_Far_From_MA = 1.0; // Price far from MA (%)
+input group "=== Price & Moving Average Settings ===" input double Inp_Price_Far_From_MA = 0.5; // Price far from MA (%) 1.0
 input double Inp_Price_Near_MA = 0.5;                                                           // Price near MA (%)
 input double Inp_Price_Too_Far_For_Range = 0.8;                                                 // Price too far for range (%)
 
@@ -32,28 +32,58 @@ input group "=== Volatility Settings ===" input double Inp_Volatility_High = 0.7
 input double Inp_Volatility_Low = 0.3;                                            // Low volatility threshold
 input double Inp_Volatility_For_New_Range = 0.5;                                  // Volatility for new range creation
 
-input group "=== Range Settings ===" input int Inp_Range_Touches_Weak = 2; // Weak range touches (minimum)
-input int Inp_Range_Touches_Strong = 3;                                    // Strong range touches
-input int Inp_Range_Lookback_Bars = 10;                                    // Bars to look back for range
-input int Inp_Structure_Lookback_Bars = 10;                                // Bars to look back for range
+input group "=== Range Settings ===" input int Inp_Range_Touches_Weak = 1; // Weak range touches (minimum)
+input int Inp_Range_Touches_Strong = 2;                                    // Strong range touches
+input int Inp_Range_Lookback_Bars = 40;                                    // Bars to look back for range
+input int Inp_Structure_Lookback_Bars = 40;                                // Bars to look back for range
 input int Inp_Invalidation_Cooldown_Bars = 8;                              // Bars to wait after range invalidation
+input double Inp_Breakout_Margin_Multiplier = 0.8;                         // Change from 0.5 to 0.8 or 1.2 for more strict
 
 input group "=== Account & Risk Settings ===" input double Inp_Account_Balance = 10000.0; // Account balance for position sizing
 input double Inp_Account_Risk_Percent = 1.0;                                              // Risk percentage per trade
 
-input group "=== Debug Settings ===" input bool Inp_Debug_Regime_Enabled = true; // Enable debug logging
+input group "=== Debug Settings ===" input bool Inp_Debug_Regime_Enabled = false; // Enable debug logging
 
 // ====================== DEBUG SETTINGS ======================
 bool DEBUG_REGIME_ENABLED = Inp_Debug_Regime_Enabled;
 
-// Simple debug function using Logger
-void DebugRegimeLogFile(string context, string message)
+// Enhanced debug wrapper functions using Logger
+void DebugRegimeLogFile(string context, string message, bool logToFile = true, bool logToConsole = true)
 {
    if (DEBUG_REGIME_ENABLED)
    {
-      Logger::Log("MarketRegime", StringFormat("%s: %s", context, message), true, false);
+      Logger::Log("MarketRegime", StringFormat("%s: %s", context, message), logToFile, logToConsole);
    }
 }
+
+void DebugRegimeError(string context, string message)
+{
+   if (DEBUG_REGIME_ENABLED)
+   {
+      string fullMsg = StringFormat("%s: %s", context, message);
+      Logger::LogError("MarketRegime", fullMsg);
+      DebugRegimeLogFile("ERROR", fullMsg, true, true);
+   }
+}
+
+void DebugRegimeWarning(string context, string message)
+{
+   if (DEBUG_REGIME_ENABLED)
+   {
+      DebugRegimeLogFile("WARNING", StringFormat("%s: %s", context, message), true, true);
+   }
+}
+
+void DebugRegimePrint(string context, string message)
+{
+   if (DEBUG_REGIME_ENABLED)
+   {
+      DebugRegimeLogFile(context, message, true, true);
+   }
+}
+
+// ==================== GLOBAL INSTANCE COUNTER ====================
+int globalInstanceCounter = 0;
 
 //+------------------------------------------------------------------+
 //| Market Regime Detector Class                                     |
@@ -78,6 +108,11 @@ private:
 
    int m_rangeTouchesWeak;
    int m_rangeTouchesStrong;
+
+   // Add these with other member variables
+   ENUM_MARKET_STATE m_lastState;
+   int m_statePersistence; // Bars in current state
+   int m_minStateBars;     // Minimum bars before changing
 
    // ==================== CACHE STRUCT ====================
    struct MarketStateCache
@@ -112,32 +147,107 @@ private:
       {
          m_detector = &detector;
 
-         if (timestamp == iTime(detector.m_symbol, detector.m_timeframe, 0))
-            return;
+         datetime currentBarTime = iTime(detector.m_symbol, detector.m_timeframe, 0);
 
-         timestamp = iTime(detector.m_symbol, detector.m_timeframe, 0);
+         // Check if we're on the same bar
+         if (timestamp == currentBarTime)
+         {
+            DebugRegimeLogFile("Cache", "CACHE HIT - Updating tick-sensitive values");
 
-         // Get all indicator values ONCE
+            // Even on cache hit, we MUST update these values (they change every tick):
+            // 1. Current price (changes every tick)
+            currentPrice = iClose(detector.m_symbol, detector.m_timeframe, 0);
+            DebugRegimeLogFile("Cache", StringFormat("Updated current price = %.5f", currentPrice));
+
+            // 2. ATR (volatility changes)
+            atr = detector.GetATR(14);
+            DebugRegimeLogFile("Cache", StringFormat("Updated ATR = %.5f", atr));
+
+            // 3. Recalculate price vs MA (price changed)
+            if (ma50 > 0)
+            {
+               priceVsMAPercent = MathAbs(currentPrice - ma50) / ma50 * 100;
+               priceVsMAAbsolute = MathAbs(currentPrice - ma50);
+               DebugRegimeLogFile("Cache", StringFormat("Updated PriceVsMA Percent = %.2f%%", priceVsMAPercent));
+            }
+
+            // 4. Update volatility score (depends on ATR)
+            volatilityScore = detector.CalculateVolatilityScore(atr, bbWidth);
+            DebugRegimeLogFile("Cache", StringFormat("Updated volatility score = %.3f", volatilityScore));
+
+            // 5. Check range status (price might have moved)
+            priceInRange = detector.IsPriceInFixedRange(currentPrice);
+            DebugRegimeLogFile("Cache", StringFormat("Price in range? %s", priceInRange ? "YES" : "NO"));
+
+            // 6. Get fresh range touches count
+            rangeTouches = detector.CountRangeTouches();
+            DebugRegimeLogFile("Cache", StringFormat("Range touches = %d", rangeTouches));
+
+            // BAR-BASED VALUES STAY CACHED (only change on new bar):
+            // - MA values (calculated from bar close prices)
+            // - ADX (based on bar data)
+            // - Structure analysis (bar-based)
+
+            return; // Skip bar-based recalculations
+         }
+
+         DebugRegimeLogFile("Cache", "CACHE MISS - Calculating ALL values for new bar");
+         timestamp = currentBarTime;
+
+         // ==================== BAR-BASED CALCULATIONS ====================
+         // These only change when a new bar forms
+
+         // Get indicator values
+         DebugRegimeLogFile("Cache", "Getting indicator values for new bar...");
          adx = detector.GetADX(14);
          atr = detector.GetATR(14);
          ma50 = detector.GetMAValue(50, 0);
          ma50_5 = detector.GetMAValue(50, 5);
-         currentPrice = iClose(detector.m_symbol, detector.m_timeframe, 0);
          bbWidth = detector.GetBollingerWidth(20, 2);
          priceChange8 = detector.GetPriceChange(8);
 
-         // Calculate derived values ONCE
+         DebugRegimeLogFile("Cache", StringFormat("ADX = %.1f, ATR = %.5f, BB Width = %.3f%%, Price change (8 bars) = %.2f%%",
+                                                  adx, atr, bbWidth, priceChange8));
+
+         // Get current price
+         currentPrice = iClose(detector.m_symbol, detector.m_timeframe, 0);
+         DebugRegimeLogFile("Cache", StringFormat("Current Price = %.5f", currentPrice));
+
+         // Calculate MA-based values
          if (ma50 > 0)
          {
             priceVsMAPercent = MathAbs(currentPrice - ma50) / ma50 * 100;
             priceVsMAAbsolute = MathAbs(currentPrice - ma50);
             maSlope = (ma50 - ma50_5) / 5.0;
+
+            DebugRegimeLogFile("Cache", StringFormat("✅ MA50 valid: PriceVsMA Percent = %.2f%%, Absolute = %.5f, Slope = %.5f",
+                                                     priceVsMAPercent, priceVsMAAbsolute, maSlope));
+         }
+         else
+         {
+            DebugRegimeError("Cache", StringFormat("MA50 <= 0! Value = %.5f, MA50_5 = %.5f", ma50, ma50_5));
+
+            // Try to get MA value directly as fallback
+            double testMA = iMA(detector.m_symbol, detector.m_timeframe, 50, 0, MODE_SMA, PRICE_CLOSE);
+            DebugRegimeLogFile("Cache", StringFormat("Direct iMA test: %.5f", testMA));
+
+            // Keep previous values if MA calculation fails
+            if (priceVsMAPercent == 0)
+            {
+               priceVsMAPercent = 0.5; // Default value
+               DebugRegimeLogFile("Cache", "Using default PriceVsMA: 0.5%");
+            }
          }
 
+         // Calculate derived values
          volatilityScore = detector.CalculateVolatilityScore(atr, bbWidth);
          rangeTouches = detector.CountRangeTouches();
          priceInRange = detector.IsPriceInFixedRange(currentPrice);
          rangeActive = detector.m_rangeActive;
+
+         DebugRegimeLogFile("Cache", StringFormat("Volatility score = %.3f, Range touches = %d, Price in range? %s, Range active? %s",
+                                                  volatilityScore, rangeTouches, priceInRange ? "YES" : "NO", rangeActive ? "YES" : "NO"));
+         DebugRegimeLogFile("Cache", "END CACHE CALCULATION");
       }
    };
 
@@ -170,13 +280,23 @@ private:
    // Cache instance
    MarketStateCache m_cache;
 
-public:
+   // Instance tracking
+   int m_instanceId;
+   static int m_totalInstances;
+
+   // ==================== PRIVATE SINGLETON CONSTRUCTOR ====================
    MarketRegimeDetector(string symbol = NULL,
-                        ENUM_TIMEFRAMES tf = PERIOD_H1,
+                        ENUM_TIMEFRAMES tf = PERIOD_M15,
                         double accountBalance = 0, // Will use input parameter if not provided
                         double riskPercent = 0,    // Will use input parameter if not provided
                         bool useIndicatorManager = true)
    {
+      m_instanceId = globalInstanceCounter++;
+      m_totalInstances++;
+
+      DebugRegimePrint("Constructor", StringFormat("Creating Market Regime Detector Instance #%d (Total: %d)",
+                                                   m_instanceId, m_totalInstances));
+
       m_symbol = (symbol == NULL) ? Symbol() : symbol;
       m_timeframe = tf;
       m_rangeActive = false;
@@ -214,32 +334,45 @@ public:
       m_rangeTouchesWeak = Inp_Range_Touches_Weak;
       m_rangeTouchesStrong = Inp_Range_Touches_Strong;
 
-      DebugRegimeLogFile("Constructor", StringFormat("Initializing detector for %s timeframe %d",
-                                                     m_symbol, m_timeframe));
-      DebugRegimeLogFile("Constructor", StringFormat("ADX Thresholds: Trending=%.1f, Confirmation=%.1f, Exhaustion=%.1f, Contraction=%.1f",
-                                                     m_adxTrendingThreshold, m_adxTrendConfirmation,
-                                                     m_adxExhaustion, m_adxContraction));
-      DebugRegimeLogFile("Constructor", StringFormat("Price MA Thresholds: Far=%.1f%%, Near=%.1f%%, TooFar=%.1f%%",
-                                                     m_priceFarFromMA, m_priceNearMA, m_priceTooFarForRange));
-      DebugRegimeLogFile("Constructor", StringFormat("Volatility Thresholds: High=%.1f, Low=%.1f, NewRange=%.1f",
-                                                     m_volatilityHigh, m_volatilityLow, m_volatilityForNewRange));
-      DebugRegimeLogFile("Constructor", StringFormat("Range Touches: Weak=%d, Strong=%d",
-                                                     m_rangeTouchesWeak, m_rangeTouchesStrong));
-      DebugRegimeLogFile("Constructor", StringFormat("Account: Balance=$%.2f, Risk=%.1f%%",
-                                                     m_accountBalance, m_accountRiskPercent));
+      m_lastState = STATE_UNKNOWN;
+      m_statePersistence = 0;
+      m_minStateBars = 3;
 
-      // Initialize indicator manager if requested
+      DebugRegimeLogFile("Constructor", StringFormat("Instance #%d: Initializing detector for %s timeframe %d",
+                                                     m_instanceId, m_symbol, m_timeframe));
+
+      // ==================== ✅ UPDATED: USE SINGLETON INSTEAD OF CREATING NEW ====================
       if (m_useIndicatorManager)
       {
-         m_indicatorManager = new IndicatorManager(m_symbol);
-         if (!m_indicatorManager.Initialize())
+         // ✅ GET THE SINGLETON INSTANCE
+         m_indicatorManager = IndicatorManager::Instance();
+
+         if (m_indicatorManager == NULL)
          {
-            Logger::LogError("MarketRegime", "IndicatorManager failed to initialize. Falling back to direct indicators.");
+            DebugRegimeError("Constructor", "Failed to get IndicatorManager singleton. Falling back to direct indicators.");
             m_useIndicatorManager = false;
          }
          else
          {
-            DebugRegimeLogFile("Constructor", "IndicatorManager initialized successfully");
+            // ✅ Ensure singleton is initialized
+            if (!m_indicatorManager.IsInitialized())
+            {
+               DebugRegimeLogFile("Constructor", "IndicatorManager singleton not initialized, initializing now...");
+               if (!m_indicatorManager.Initialize())
+               {
+                  DebugRegimeError("Constructor", "Failed to initialize IndicatorManager singleton. Falling back to direct indicators.");
+                  m_useIndicatorManager = false;
+                  m_indicatorManager = NULL;
+               }
+               else
+               {
+                  DebugRegimeLogFile("Constructor", "IndicatorManager singleton initialized successfully");
+               }
+            }
+            else
+            {
+               DebugRegimeLogFile("Constructor", "IndicatorManager singleton already initialized");
+            }
          }
       }
       else
@@ -252,18 +385,70 @@ public:
       InitializeFixedRange();
    }
 
-   ~MarketRegimeDetector()
-   {
-      DebugRegimeLogFile("Destructor", "Cleaning up MarketRegimeDetector");
+public:
+   // ==================== PUBLIC GETTER METHODS ====================
+   string GetSymbol() const { return m_symbol; }
+   ENUM_TIMEFRAMES GetTimeframe() const { return m_timeframe; }
+   int GetInstanceId() const { return m_instanceId; }
+   static int GetTotalInstances() { return m_totalInstances; }
 
-      if (m_indicatorManager != NULL)
+   // ==================== SINGLETON PATTERN ====================
+   static MarketRegimeDetector *Instance(string symbol = NULL,
+                                         ENUM_TIMEFRAMES tf = PERIOD_M15,
+                                         double accountBalance = 0,
+                                         double riskPercent = 0,
+                                         bool useIndicatorManager = true)
+   {
+      static MarketRegimeDetector *instance = NULL;
+
+      if (instance == NULL)
       {
-         m_indicatorManager.Deinitialize();
-         delete m_indicatorManager;
-         DebugRegimeLogFile("Destructor", "IndicatorManager cleaned up");
+         // Create ONCE, on first call
+         instance = new MarketRegimeDetector(symbol, tf, accountBalance, riskPercent, useIndicatorManager);
+         DebugRegimePrint("Singleton", StringFormat("MARKET REGIME DETECTOR CREATED: Instance #%d for %s %s",
+                                                    instance.GetInstanceId(),
+                                                    (symbol == NULL ? Symbol() : symbol),
+                                                    EnumToString(tf)));
+      }
+      else
+      {
+         // Warn if trying to use different timeframe (THIS SHOULD NEVER HAPPEN!)
+         string currentSymbol = (symbol == NULL ? Symbol() : symbol);
+         if (instance.GetSymbol() != currentSymbol || instance.GetTimeframe() != tf)
+         {
+            DebugRegimeWarning("Singleton", StringFormat("Singleton requested for different symbol/timeframe! Existing: %s %s, Requested: %s %s",
+                                                         instance.GetSymbol(), EnumToString(instance.GetTimeframe()),
+                                                         currentSymbol, EnumToString(tf)));
+         }
       }
 
-      Logger::Log("MarketRegime", "Detector shutdown complete", true, false);
+      return instance;
+   }
+
+   static void DeleteInstance()
+   {
+      static MarketRegimeDetector *instance = NULL;
+      if (instance != NULL)
+      {
+         DebugRegimePrint("Singleton", StringFormat("Deleting Market Regime Detector Singleton: Instance #%d", instance.GetInstanceId()));
+         delete instance;
+         instance = NULL;
+         m_totalInstances--;
+         DebugRegimeLogFile("Singleton", "Deleted MarketRegimeDetector instance");
+      }
+   }
+
+   ~MarketRegimeDetector()
+   {
+      DebugRegimeLogFile("Destructor", StringFormat("Cleaning up MarketRegimeDetector Instance #%d", m_instanceId));
+
+      // ✅ DO NOT delete IndicatorManager - it's a singleton!
+      // Just clear the pointer
+      m_indicatorManager = NULL;
+
+      m_totalInstances--;
+
+      DebugRegimeLogFile("MarketRegime", StringFormat("Detector Instance #%d shutdown complete", m_instanceId), true, false);
    }
 
    //+------------------------------------------------------------------+
@@ -271,10 +456,21 @@ public:
    //+------------------------------------------------------------------+
    MarketAnalysis GetMarketRegime()
    {
-      DebugRegimeLogFile("GetMarketRegime", "Starting market analysis");
+      DebugRegimeLogFile("GetMarketRegime", StringFormat("=== INSTANCE #%d: STARTING MARKET ANALYSIS ===", m_instanceId));
+
+      // Log instance identifier
+      static int callCount = 0;
+      callCount++;
+
+      DebugRegimeLogFile("GetMarketRegime",
+                         StringFormat("CALL #%d | Instance #%d: %s %s",
+                                      callCount, m_instanceId, m_symbol, EnumToString(m_timeframe)));
 
       // CALCULATE EVERYTHING ONCE PER BAR
       m_cache.Calculate(this);
+
+      // VERIFY RANGE STATUS BEFORE ANALYSIS
+      VerifyRangeStatus();
 
       MarketAnalysis analysis;
 
@@ -285,7 +481,7 @@ public:
       if (!m_rangeActive && ShouldCreateNewRange())
       {
          InitializeFixedRange();
-         m_cache.rangeActive = true; // Update cache
+         m_cache.rangeActive = true;
          m_cache.priceInRange = true;
       }
 
@@ -294,34 +490,245 @@ public:
       analysis.rootState = GetRootState(analysis.state);
       analysis.confidence = CalculateConfidence(analysis.state);
 
+      // 4. LOG FINAL DETERMINATION
+      LogFinalStateDetermination(analysis.state, analysis.rootState);
+
+      // 5. Verify cache is synchronized
+      if (m_cache.rangeActive != m_rangeActive)
+      {
+         DebugRegimeWarning("CacheSync",
+                            StringFormat("CACHE OUT OF SYNC! m_rangeActive=%s, cache.rangeActive=%s - FIXING",
+                                         m_rangeActive ? "true" : "false",
+                                         m_cache.rangeActive ? "true" : "false"));
+         m_cache.rangeActive = m_rangeActive;
+         m_cache.priceInRange = m_rangeActive && IsPriceInFixedRange(m_cache.currentPrice);
+      }
+
       DebugRegimeLogFile("GetMarketRegime", StringFormat("Detected state: %s with %.1f%% confidence",
                                                          MarketAnalysis::GetStateString(analysis.state), analysis.confidence));
 
-      // 4. Determine next likely state
+      // 6. Determine next likely state
       analysis.nextLikelyState = PredictNextState(analysis.state);
 
-      DebugRegimeLogFile("GetMarketRegime", StringFormat("Next likely state: %s",
-                                                         MarketAnalysis::GetStateString(analysis.nextLikelyState)));
-
-      // 5. Generate trading recommendations
+      // 7. Generate trading recommendations
       GenerateRecommendations(analysis);
 
-      DebugRegimeLogFile("GetMarketRegime", StringFormat("Recommendation: %s (Position: %s)",
-                                                         analysis.action, GetPositionSizeString(analysis.positionSize)));
+      if (DEBUG_REGIME_ENABLED)
+      {
+         LogTradeSignal(analysis);
+      }
 
-      // 6. Set description
+      // 8. Set description
       analysis.description = GenerateDescription(analysis);
+
+      // 9. FINAL VERIFICATION
+      VerifyRangeStatus();
 
       DebugRegimeLogFile("GetMarketRegime", "Analysis complete");
 
       // Log final analysis summary
-      Logger::Log("MarketRegime", StringFormat("ANALYSIS: %s | Confidence: %.0f%% | Action: %s | R/R: %.1f", MarketAnalysis::GetStateString(analysis.state), analysis.confidence, analysis.action, analysis.riskRewardRatio),
-                  true, true);
+      string summary = StringFormat("INSTANCE #%d | ANALYSIS: %s | Confidence: %.0f%% | Action: %s | R/R: %.1f",
+                                    m_instanceId,
+                                    MarketAnalysis::GetStateString(analysis.state),
+                                    analysis.confidence,
+                                    analysis.action,
+                                    analysis.riskRewardRatio);
+
+      DebugRegimePrint("MarketRegime", "=== MARKET REGIME SUMMARY ===");
+      DebugRegimePrint("MarketRegime", summary);
+      DebugRegimePrint("MarketRegime", "=============================");
 
       return analysis;
    }
 
 private:
+
+   // Add this method in private section
+   ENUM_MARKET_STATE ApplyHysteresis(ENUM_MARKET_STATE newState)
+   {
+      // Apply hysteresis to prevent whipsaw
+      if (newState == m_lastState)
+      {
+         m_statePersistence++;
+         DebugRegimeLogFile("StatePersistence",
+                            StringFormat("Instance #%d | State %s maintained for %d bars",
+                                         m_instanceId, MarketAnalysis::GetStateString(newState), m_statePersistence));
+      }
+      else if (m_statePersistence < m_minStateBars && m_lastState != STATE_UNKNOWN)
+      {
+         // Not enough bars in old state - block change
+         DebugRegimeLogFile("StateHysteresis",
+                            StringFormat("Instance #%d | BLOCKING state change: %s -> %s (only %d bars in current)",
+                                         m_instanceId,
+                                         MarketAnalysis::GetStateString(m_lastState),
+                                         MarketAnalysis::GetStateString(newState),
+                                         m_statePersistence));
+
+         // Return old state
+         m_statePersistence++; // Count this as persistence in old state
+         return m_lastState;
+      }
+      else
+      {
+         // State change allowed
+         DebugRegimeLogFile("StateChange",
+                            StringFormat("Instance #%d | State changed: %s -> %s (was in %s for %d bars)",
+                                         m_instanceId,
+                                         MarketAnalysis::GetStateString(m_lastState),
+                                         MarketAnalysis::GetStateString(newState),
+                                         MarketAnalysis::GetStateString(m_lastState),
+                                         m_statePersistence));
+
+         m_lastState = newState;
+         m_statePersistence = 1;
+      }
+
+      return newState;
+   }
+
+   // Add these helper methods
+   bool IsPricePulledBackToMA50()
+   {
+      // Check if price was far from MA50 and now returned
+      double priceVsMA_Now = m_cache.priceVsMAPercent;
+      double priceVsMA_5BarsAgo = GetPriceVsMA(5);
+
+      // Was price > 0.8% away 5 bars ago?
+      bool wasFarAway = MathAbs(priceVsMA_5BarsAgo) > 0.8;
+
+      // Is now close to MA50?
+      bool nowClose = MathAbs(priceVsMA_Now) < 0.3;
+
+      // Is price decelerating toward MA50?
+      bool slowingDown = MathAbs(m_cache.maSlope) < 0.0002;
+
+      bool result = wasFarAway && nowClose && slowingDown;
+
+      if (result)
+      {
+         DebugRegimeLogFile("IsPricePulledBackToMA50",
+                            StringFormat("Instance #%d | Pullback detected: Was %.2f%%, Now %.2f%%, Slope %.5f",
+                                         m_instanceId, priceVsMA_5BarsAgo, priceVsMA_Now, m_cache.maSlope));
+      }
+
+      return result;
+   }
+
+   double GetPriceVsMA(int barsAgo)
+   {
+      double ma = GetMAValue(50, barsAgo);
+      double price = iClose(m_symbol, m_timeframe, barsAgo);
+
+      if (ma > 0)
+         return MathAbs(price - ma) / ma * 100;
+
+      return 0;
+   }
+
+   //+------------------------------------------------------------------+
+   //| FINAL STATE LOGGING METHOD                                      |
+   //+------------------------------------------------------------------+
+   void LogFinalStateDetermination(ENUM_MARKET_STATE state, ENUM_ROOT_REGIME rootState)
+   {
+      string finalState = MarketAnalysis::GetStateString(state);
+      string rootRegime = (rootState == REGIME_TRENDING) ? "TREND" : "RANGE";
+
+      string finalMsg = StringFormat("INSTANCE #%d | FINAL RESULT: %s . %s regime",
+                                     m_instanceId, finalState, rootRegime);
+
+      // Log with special markers for easy identification
+      DebugRegimePrint("FINAL_STATE", "================================================");
+      DebugRegimePrint("FINAL_STATE", finalMsg);
+      DebugRegimePrint("FINAL_STATE", "================================================");
+
+      // Additional context
+      DebugRegimeLogFile("StateDetails",
+                         StringFormat("Instance #%d | State: %s, Root: %s, Price: %.5f, RangeActive: %s",
+                                      m_instanceId, finalState, rootRegime,
+                                      m_cache.currentPrice,
+                                      m_rangeActive ? "YES" : "NO"));
+   }
+
+   //+------------------------------------------------------------------+
+   //| RANGE STATUS VERIFICATION METHOD                                |
+   //+------------------------------------------------------------------+
+   void VerifyRangeStatus()
+   {
+      string rangeStatus = StringFormat(
+          "Instance #%d | RANGE VERIFICATION | Active: %s | Top: %.5f | Bottom: %.5f | PriceInRange: %s | Touches: %d",
+          m_instanceId,
+          m_rangeActive ? "YES" : "NO",
+          m_fixedRangeTop,
+          m_fixedRangeBottom,
+          IsPriceInFixedRange(m_cache.currentPrice) ? "YES" : "NO",
+          m_cache.rangeTouches);
+
+      DebugRegimeLogFile("RangeVerification", rangeStatus);
+   }
+
+   //+------------------------------------------------------------------+
+   //| SIMPLE TRADE LOGGING                                            |
+   //+------------------------------------------------------------------+
+   void LogTradeSignal(const MarketAnalysis &analysis)
+   {
+      if (!DEBUG_REGIME_ENABLED)
+         return;
+
+      // Determine trade signal
+      string tradeSignal = "HOLD";
+      if (analysis.direction == "Bullish breakout")
+         tradeSignal = "BUY";
+      else if (analysis.direction == "Bearish breakout")
+         tradeSignal = "SELL";
+      else if (analysis.action == "Fade range extremes" ||
+               analysis.action == "Fade carefully with tight stops")
+         tradeSignal = "FADE";
+      else if (analysis.action == "Add to winning positions")
+         tradeSignal = "ADD_TO_TREND";
+      else if (analysis.action == "Take partial profits")
+         tradeSignal = "TAKE_PROFIT";
+      else if (analysis.action == "Exit positions, wait for clarity")
+         tradeSignal = "EXIT_ALL";
+
+      // Calculate position size in lots
+      double positionLots = 0;
+      switch (analysis.positionSize)
+      {
+      case SIZE_VERY_SMALL:
+         positionLots = 0.01;
+         break;
+      case SIZE_SMALL:
+         positionLots = 0.05;
+         break;
+      case SIZE_MEDIUM:
+         positionLots = 0.10;
+         break;
+      case SIZE_LARGE:
+         positionLots = 0.20;
+         break;
+      }
+
+      // Create trade log message
+      string tradeMsg = StringFormat("Instance #%d | %s %s | State: %s | Action: %s | Size: %s (%.2f lots) | R/R: %.1f",
+                                     m_instanceId, tradeSignal, m_symbol,
+                                     MarketAnalysis::GetStateString(analysis.state),
+                                     analysis.action,
+                                     GetPositionSizeString(analysis.positionSize),
+                                     positionLots,
+                                     analysis.riskRewardRatio);
+
+      // Log using debug wrapper
+      DebugRegimeLogFile("TradeSignal", tradeMsg, true, false);
+
+      // For BUY/SELL signals, also use Logger::LogTrade
+      if (tradeSignal == "BUY" || tradeSignal == "SELL")
+      {
+         string tradeDetail = StringFormat("Instance #%d | Trade Signal: %s %s %.2f lots @ %.5f",
+                                           m_instanceId, tradeSignal, m_symbol, positionLots, m_cache.currentPrice);
+         Logger::LogTrade("MarketRegime", m_symbol, tradeSignal, positionLots, m_cache.currentPrice);
+      }
+   }
+
    void CheckAndReinitializeRange()
    {
       datetime currentTime = iTime(m_symbol, m_timeframe, 0);
@@ -333,25 +740,35 @@ private:
       m_barsSinceLastRangeInit++;
 
       DebugRegimeLogFile("CheckAndReinitializeRange",
-                         StringFormat("=== RANGE MAINTENANCE CHECK === | Bars since init: %d",
-                                      m_barsSinceLastRangeInit));
+                         StringFormat("Instance #%d | === RANGE MAINTENANCE CHECK === | Bars since init: %d",
+                                      m_instanceId, m_barsSinceLastRangeInit));
+
+      // CRITICAL DEBUG: Log before invalidation
+      DebugRegimeLogFile("CheckAndReinitializeRange",
+                         StringFormat("Instance #%d | BEFORE Invalidation: m_rangeActive=%s, cache.rangeActive=%s",
+                                      m_instanceId, m_rangeActive ? "true" : "false", m_cache.rangeActive ? "true" : "false"));
 
       // 1. FIRST check if range should be invalidated (regardless of m_rangeActive)
-      CheckAndInvalidateRange(); // ← CRITICAL MISSING LINE!
+      CheckAndInvalidateRange();
+
+      // CRITICAL DEBUG: Log after invalidation
+      DebugRegimeLogFile("CheckAndReinitializeRange",
+                         StringFormat("Instance #%d | AFTER Invalidation: m_rangeActive=%s, cache.rangeActive=%s",
+                                      m_instanceId, m_rangeActive ? "true" : "false", m_cache.rangeActive ? "true" : "false"));
 
       // 2. ONLY THEN check reinitialization for ACTIVE ranges
       if (m_rangeActive && ShouldSmartReinitialize())
       {
-         DebugRegimeLogFile("CheckAndReinitializeRange", "Range needs reinitialization");
+         DebugRegimeLogFile("CheckAndReinitializeRange", StringFormat("Instance #%d | Range needs reinitialization", m_instanceId));
          ReinitializeRange();
       }
       else if (m_rangeActive)
       {
-         DebugRegimeLogFile("CheckAndReinitializeRange", "Range active, no reinitialization needed");
+         DebugRegimeLogFile("CheckAndReinitializeRange", StringFormat("Instance #%d | Range active, no reinitialization needed", m_instanceId));
       }
       else
       {
-         DebugRegimeLogFile("CheckAndReinitializeRange", "No active range (either never existed or was invalidated)");
+         DebugRegimeLogFile("CheckAndReinitializeRange", StringFormat("Instance #%d | No active range", m_instanceId));
       }
    }
 
@@ -360,7 +777,7 @@ private:
    //+------------------------------------------------------------------+
    bool ShouldSmartReinitialize()
    {
-      DebugRegimeLogFile("ShouldSmartReinitialize", "Checking if smart reinitialization is needed");
+      DebugRegimeLogFile("ShouldSmartReinitialize", StringFormat("Instance #%d | Checking if smart reinitialization is needed", m_instanceId));
 
       // Get current market state (uses cached values)
       ENUM_MARKET_STATE state = DetectCurrentState();
@@ -392,49 +809,78 @@ private:
       {
          if (isClearRanging || priceOutOfRange)
          {
-            DebugRegimeLogFile("ShouldSmartReinitialize", "Conditions met for smart reinitialization");
+            DebugRegimeLogFile("ShouldSmartReinitialize", StringFormat("Instance #%d | Conditions met for smart reinitialization", m_instanceId));
             return true;
          }
 
          // Reinitialize if market is in contraction/expansion phase
          if (state == STATE_CONTRACTION || state == STATE_EXPANSION)
          {
-            DebugRegimeLogFile("ShouldSmartReinitialize", "Contraction/Expansion phase detected");
+            DebugRegimeLogFile("ShouldSmartReinitialize", StringFormat("Instance #%d | Contraction/Expansion phase detected", m_instanceId));
             return true;
          }
       }
 
-      DebugRegimeLogFile("ShouldSmartReinitialize", "No need for smart reinitialization");
+      DebugRegimeLogFile("ShouldSmartReinitialize", StringFormat("Instance #%d | No need for smart reinitialization", m_instanceId));
       return false;
    }
 
    void ReinitializeRange()
    {
-      DebugRegimeLogFile("ReinitializeRange", "Reinitializing fixed range...");
-      Logger::Log("MarketRegime", "Reinitializing fixed range", true, false);
+      DebugRegimeLogFile("ReinitializeRange", StringFormat("Instance #%d | Reinitializing fixed range...", m_instanceId));
       InitializeFixedRange();
       m_barsSinceLastRangeInit = 0;
    }
 
    void InitializeFixedRange()
    {
-      DebugRegimeLogFile("InitializeFixedRange", "=== ATTEMPTING RANGE INITIALIZATION ===");
+      DebugRegimeLogFile("InitializeFixedRange", StringFormat("Instance #%d | === ATTEMPTING RANGE INITIALIZATION ===", m_instanceId));
+
+      // ==================== CHECK FOR DUPLICATE INITIALIZATION ====================
+      // Use static variable to track last initialization time
+      static datetime lastInitTime = 0;
+      datetime currentTime = iTime(m_symbol, m_timeframe, 0);
+
+      if (lastInitTime == currentTime && m_rangeActive)
+      {
+         DebugRegimeLogFile("InitializeFixedRange", StringFormat("Instance #%d | Already initialized this bar, skipping duplicate", m_instanceId));
+         return;
+      }
 
       // ==================== COMPREHENSIVE GUARDS ====================
-
       // GUARD 1: Don't initialize if range is already active
       if (m_rangeActive)
       {
          DebugRegimeLogFile("InitializeFixedRange",
-                            StringFormat("❌ Range already active (Top: %.5f, Bottom: %.5f), skipping",
-                                         m_fixedRangeTop, m_fixedRangeBottom));
+                            StringFormat("Instance #%d | Range already active (Top: %.5f, Bottom: %.5f), skipping",
+                                         m_instanceId, m_fixedRangeTop, m_fixedRangeBottom));
+         return;
+      }
+
+      // GUARD 2: Check cooldown after invalidation
+      if (m_lastInvalidationTime > 0)
+      {
+         int barsSinceInvalidation = iBarShift(m_symbol, m_timeframe, m_lastInvalidationTime);
+         if (barsSinceInvalidation < m_invalidationCooldownBars)
+         {
+            DebugRegimeLogFile("InitializeFixedRange",
+                               StringFormat("Instance #%d | Still in cooldown: %d/%d bars since invalidation",
+                                            m_instanceId, barsSinceInvalidation, m_invalidationCooldownBars));
+            return;
+         }
+      }
+
+      // GUARD 3: Check if market conditions are suitable for range creation
+      if (!ShouldCreateNewRange())
+      {
+         DebugRegimeLogFile("InitializeFixedRange", StringFormat("Instance #%d | Market conditions not suitable for new range", m_instanceId));
          return;
       }
 
       // ==================== ACTUAL RANGE CREATION ====================
-      DebugRegimeLogFile("InitializeFixedRange", "✅ All guards passed, creating new range");
+      DebugRegimeLogFile("InitializeFixedRange", StringFormat("Instance #%d | All guards passed, creating new range", m_instanceId));
 
-      int bars = 10;
+      int bars = Inp_Range_Lookback_Bars;
       double highest = 0;
       double lowest = DBL_MAX;
 
@@ -453,24 +899,33 @@ private:
       {
          m_fixedRangeTop = highest;
          m_fixedRangeBottom = lowest;
-         m_rangeStartTime = iTime(m_symbol, m_timeframe, 0);
+         m_rangeStartTime = currentTime;
          m_rangeActive = true;
          m_barsSinceLastRangeInit = 0;
+         lastInitTime = currentTime; // Track when we initialized
 
-         string rangeInfo = StringFormat("✅ Fixed Range Initialized: %.5f - %.5f (Width: %.2f%%)",
-                                         lowest, highest,
+         // CRITICAL: Update cache to reflect new range
+         m_cache.rangeActive = true;
+         m_cache.priceInRange = IsPriceInFixedRange(m_cache.currentPrice);
+
+         string rangeInfo = StringFormat("Instance #%d | Fixed Range Initialized: %.5f - %.5f (Width: %.2f%%)",
+                                         m_instanceId, lowest, highest,
                                          ((highest - lowest) / ((highest + lowest) / 2)) * 100);
 
-         Print(rangeInfo);
-         Logger::Log("MarketRegime", rangeInfo, true, true);
-         DebugRegimeLogFile("InitializeFixedRange", rangeInfo);
+         // Log using debug wrapper
+         DebugRegimePrint("RangeInfo", rangeInfo);
 
-         // Log range details
-         Logger::LogTrade("Range", m_symbol, "RANGE", 0, (highest + lowest) / 2);
+         // Log range details separately
+         if (DEBUG_REGIME_ENABLED)
+         {
+            DebugRegimeLogFile("RangeDetails",
+                               StringFormat("Instance #%d | Range created: %.5f-%.5f | Mid: %.5f | Current Price: %.5f",
+                                            m_instanceId, lowest, highest, (highest + lowest) / 2, m_cache.currentPrice));
+         }
       }
       else
       {
-         DebugRegimeLogFile("InitializeFixedRange", "❌ Failed to initialize fixed range (highest <= lowest)");
+         DebugRegimeError("InitializeFixedRange", StringFormat("Instance #%d | Failed to initialize fixed range (highest <= lowest)", m_instanceId));
       }
    }
 
@@ -479,58 +934,61 @@ private:
    //+------------------------------------------------------------------+
    bool ShouldCreateNewRange()
    {
-      DebugRegimeLogFile("ShouldCreateNewRange", "=== Checking if new range should be created ===");
+      DebugRegimeLogFile("ShouldCreateNewRange",
+                         StringFormat("Instance #%d | === Checking if new range should be created ===", m_instanceId));
 
-      // GUARD 0: Already active? (shouldn't get here with Guard 1 above, but just in case)
+      // GUARD 0: Already active?
       if (m_rangeActive)
       {
-         DebugRegimeLogFile("ShouldCreateNewRange", "❌ Range already active");
+         DebugRegimeLogFile("ShouldCreateNewRange",
+                            StringFormat("Instance #%d | Range already active", m_instanceId));
          return false;
       }
 
-      // 1. Check cooldown period (redundant with Guard 2, but good for clarity)
+      // 1. Check cooldown period
       if (m_lastInvalidationTime > 0)
       {
          int barsSinceInvalidation = iBarShift(m_symbol, m_timeframe, m_lastInvalidationTime);
          if (barsSinceInvalidation < m_invalidationCooldownBars)
          {
             DebugRegimeLogFile("ShouldCreateNewRange",
-                               StringFormat("❌ Still in cooldown: %d/%d bars",
-                                            barsSinceInvalidation, m_invalidationCooldownBars));
-            return false; // Still in cooldown
+                               StringFormat("Instance #%d | Still in cooldown: %d/%d bars",
+                                            m_instanceId, barsSinceInvalidation, m_invalidationCooldownBars));
+            return false;
          }
       }
 
       // 2. Market must be clearly ranging (not trending) - USE CACHED ADX
-      if (m_cache.adx >= m_adxTrendingThreshold) // ADX >= threshold
+      if (m_cache.adx >= m_adxTrendingThreshold)
       {
          DebugRegimeLogFile("ShouldCreateNewRange",
-                            StringFormat("❌ ADX too high for new range: %.1f (>=%.1f)",
-                                         m_cache.adx, m_adxTrendingThreshold));
+                            StringFormat("Instance #%d | ADX too high for new range: %.1f (>=%.1f)",
+                                         m_instanceId, m_cache.adx, m_adxTrendingThreshold));
          return false;
       }
 
       // 3. Price should be near MA50 (consolidating)
       if (m_cache.ma50 <= 0)
       {
-         DebugRegimeLogFile("ShouldCreateNewRange", "❌ Invalid MA50 value");
+         DebugRegimeLogFile("ShouldCreateNewRange",
+                            StringFormat("Instance #%d | Invalid MA50 value", m_instanceId));
          return false;
       }
 
       if (m_cache.priceVsMAPercent > m_priceTooFarForRange)
       {
          DebugRegimeLogFile("ShouldCreateNewRange",
-                            StringFormat("❌ Price too far from MA50: %.2f%% (>%.1f%%)",
-                                         m_cache.priceVsMAPercent, m_priceTooFarForRange));
+                            StringFormat("Instance #%d | Price too far from MA50: %.2f%% (>%.1f%%)",
+                                         m_instanceId, m_cache.priceVsMAPercent, m_priceTooFarForRange));
          return false;
       }
 
-      // 4. Check for consolidation (low volatility)
-      if (m_cache.volatilityScore > m_volatilityForNewRange)
+      // 4. ✅ CRITICAL FIX: Relax volatility threshold from 0.5 to 0.7
+      if (m_cache.volatilityScore > 0.7) // CHANGED FROM 0.5 to 0.7
       {
          DebugRegimeLogFile("ShouldCreateNewRange",
-                            StringFormat("❌ Volatility too high: %.2f (>%.1f)",
-                                         m_cache.volatilityScore, m_volatilityForNewRange));
+                            StringFormat("Instance #%d | Volatility too high: %.2f (>0.7)",
+                                         m_instanceId, m_cache.volatilityScore));
          return false;
       }
 
@@ -549,7 +1007,8 @@ private:
 
       if (avgPrice <= 0)
       {
-         DebugRegimeLogFile("ShouldCreateNewRange", "❌ Invalid average price");
+         DebugRegimeLogFile("ShouldCreateNewRange",
+                            StringFormat("Instance #%d | Invalid average price", m_instanceId));
          return false;
       }
 
@@ -558,20 +1017,23 @@ private:
       if (rangePercent > 0.5) // Range too wide
       {
          DebugRegimeLogFile("ShouldCreateNewRange",
-                            StringFormat("❌ Range too wide: %.2f%% (>0.5%%)", rangePercent));
+                            StringFormat("Instance #%d | Range too wide: %.2f%% (>0.5%%)",
+                                         m_instanceId, rangePercent));
          return false;
       }
 
-      // 6. ADDED: Wait for price to stabilize after movement
+      // 6. Wait for price to stabilize after movement
       double priceChange5 = GetPriceChange(5);
       if (MathAbs(priceChange5) > 0.8) // Price moved more than 0.8% in 5 bars
       {
          DebugRegimeLogFile("ShouldCreateNewRange",
-                            StringFormat("❌ Price still moving: %.2f%% change in 5 bars", priceChange5));
+                            StringFormat("Instance #%d | Price still moving: %.2f%% change in 5 bars",
+                                         m_instanceId, priceChange5));
          return false;
       }
 
-      DebugRegimeLogFile("ShouldCreateNewRange", "✅ All conditions met for new range creation");
+      DebugRegimeLogFile("ShouldCreateNewRange",
+                         StringFormat("Instance #%d | All conditions met for new range creation", m_instanceId));
       return true;
    }
 
@@ -580,15 +1042,47 @@ private:
    //+------------------------------------------------------------------+
    ENUM_MARKET_STATE DetectCurrentState()
    {
-      DebugRegimeLogFile("DetectCurrentState", "Starting state detection - NO UNKNOWN states");
+      DebugRegimeLogFile("DetectCurrentState", StringFormat("Instance #%d | === STARTING STATE DETECTION ===", m_instanceId));
 
-      // Check if current range should be invalidated
-      CheckAndInvalidateRange();
+      // ==================== STEP 1: DEBUG INITIAL STATE ====================
+      DebugRegimeLogFile("DetectCurrentState",
+                         StringFormat("Instance #%d | INITIAL: m_rangeActive=%s, cache.rangeActive=%s, cache.priceInRange=%s",
+                                      m_instanceId,
+                                      m_rangeActive ? "true" : "false",
+                                      m_cache.rangeActive ? "true" : "false",
+                                      m_cache.priceInRange ? "true" : "false"));
 
-      // USE CACHED VALUES (already calculated)
+      // ==================== STEP 2: CALCULATE & VALIDATE INDICATORS ====================
+      m_cache.Calculate(this);
+      CheckAndReinitializeRange();
+
+      // ==================== STEP 3: FIX - SYNCHRONIZE CACHE WITH REALITY ====================
+      // CRITICAL: Ensure cache matches actual range state after potential invalidation
+      if (m_cache.rangeActive != m_rangeActive)
+      {
+         DebugRegimeWarning("DetectCurrentState",
+                            StringFormat("Instance #%d | CACHE MISMATCH FIX: m_rangeActive=%s, cache.rangeActive=%s",
+                                         m_instanceId, m_rangeActive ? "true" : "false", m_cache.rangeActive ? "true" : "false"));
+         m_cache.rangeActive = m_rangeActive;
+         m_cache.priceInRange = m_rangeActive && IsPriceInFixedRange(m_cache.currentPrice);
+      }
+
+      // ==================== STEP 4: FIX - CLEAR RANGE EVIDENCE DEFINITION ====================
+      // CRITICAL FIX: Range evidence ONLY exists when:
+      // 1. Range is ACTIVE (m_rangeActive = true)
+      // 2. Price is INSIDE range (m_cache.priceInRange = true)
+      bool hasActiveRange = (m_rangeActive && m_cache.priceInRange);
+
+      DebugRegimeLogFile("DetectCurrentState",
+                         StringFormat("Instance #%d | [RangeEvidence] hasActiveRange=%s (m_rangeActive=%s, priceInRange=%s)",
+                                      m_instanceId,
+                                      hasActiveRange ? "true" : "false",
+                                      m_rangeActive ? "true" : "false",
+                                      m_cache.priceInRange ? "true" : "false"));
+
+      // ==================== STEP 5: GET CACHED VALUES ====================
       double adx = m_cache.adx;
       double atr = m_cache.atr;
-      double bbWidth = m_cache.bbWidth;
       double priceChange = m_cache.priceChange8;
       double rangeTouches = m_cache.rangeTouches;
       double ma50 = m_cache.ma50;
@@ -598,406 +1092,243 @@ private:
       double volatilityScore = m_cache.volatilityScore;
 
       DebugRegimeLogFile("DetectCurrentState",
-                         StringFormat("Indicators: ADX=%.1f, ATR=%.5f, BBWidth=%.4f, PriceChange=%.2f%%, RangeTouches=%d, PriceVsMA=%.2f%%",
-                                      adx, atr, bbWidth, priceChange, rangeTouches, priceVsMA));
+                         StringFormat("Instance #%d | Indicators: ADX=%.1f, ATR=%.5f, PriceVsMA=%.2f%%, RangeTouches=%d",
+                                      m_instanceId, adx, atr, priceVsMA, rangeTouches));
 
-      // Calculate biases using cached values
-      double trendBias = 0;
-      double rangeBias = 0;
+      // ==================== STEP 6: FIX - PRICE STRUCTURE ANALYSIS ====================
+      bool isTrendingStructure = IsTrendingStructure(); // HH/HL or LH/LL patterns
+      // FIX: isRangingStructure should only be true if we have an ACTIVE range
+      bool isRangingStructure = hasActiveRange; // Simplified: Range exists AND price is inside
 
-      if (ma50 > 0)
+      DebugRegimeLogFile("DetectCurrentState",
+                         StringFormat("Instance #%d | Structure: Trending=%s, Ranging=%s",
+                                      m_instanceId,
+                                      isTrendingStructure ? "true" : "false",
+                                      isRangingStructure ? "true" : "false"));
+
+      // ==================== STEP 7: FIX - RANGE VALIDITY CHECK ====================
+      if (hasActiveRange && rangeTouches < m_rangeTouchesWeak)
       {
-         bool priceFarFromMA = priceVsMA > m_priceFarFromMA;
-         bool maHasSlope = MathAbs(maSlope) > 0.0001;
-         bool priceAboveMA = currentPrice > ma50;
-         bool priceBelowMA = currentPrice < ma50;
-
-         if (priceFarFromMA && maHasSlope)
-         {
-            // Check if price and MA alignment suggests trend
-            if ((priceAboveMA && maSlope > 0) || (priceBelowMA && maSlope < 0))
-            {
-               // Strong uptrend or downtrend
-               trendBias = MathMin(1.0, priceVsMA / 2.0);
-               trendBias = MathMax(0.3, trendBias);
-
-               // Extra bias for very strong moves
-               if (priceVsMA > 1.5 && MathAbs(maSlope) > 0.0002)
-               {
-                  trendBias = MathMin(1.0, trendBias + 0.2);
-               }
-            }
-            else if ((priceAboveMA && maSlope < 0) || (priceBelowMA && maSlope > 0))
-            {
-               // Price is pulling back to MA - possible range or correction
-               rangeBias = MathMin(1.0, 0.3 + (priceVsMA / 3.0));
-            }
-         }
-         else if (priceVsMA < m_priceNearMA)
-         {
-            // Price close to MA50 suggests ranging
-            rangeBias = MathMin(1.0, 0.5 - (priceVsMA * 0.8));
-         }
+         DebugRegimeLogFile("DetectCurrentState",
+                            StringFormat("Instance #%d | Range weak: only %d touches (need %d)",
+                                         m_instanceId, rangeTouches, m_rangeTouchesWeak));
+         return STATE_EXPANSION; // Weak range suggests breakout
       }
 
+      // ==================== STEP 8: CLEAR CASE DETECTION ====================
       bool volatilityLow = volatilityScore < m_volatilityLow;
       bool volatilityHigh = volatilityScore > m_volatilityHigh;
       bool volatilityRising = IsVolatilityRising();
 
-      DebugRegimeLogFile("DetectCurrentState",
-                         StringFormat("Volatility: Score=%.2f, Low=%s, High=%s, Rising=%s",
-                                      volatilityScore, volatilityLow ? "true" : "false",
-                                      volatilityHigh ? "true" : "false", volatilityRising ? "true" : "false"));
-
-      // Price structure analysis
-      bool isTrendingStructure = IsTrendingStructure();
-      bool isRangingStructure = IsRangingStructure();
-
-      DebugRegimeLogFile("DetectCurrentState",
-                         StringFormat("Structure: Trending=%s, Ranging=%s",
-                                      isTrendingStructure ? "true" : "false",
-                                      isRangingStructure ? "true" : "false"));
-
-      // State confidence check before ranging logic
-      if (m_rangeActive)
-      {
-         // Check if range is still valid before using it
-         if (rangeTouches < m_rangeTouchesWeak) // Not enough touches
-         {
-            // Range exists but isn't being respected
-            DebugRegimeLogFile("DetectCurrentState",
-                               StringFormat("Range weak: only %d touches, likely breaking out", rangeTouches));
-            CheckAndInvalidateRange(); // Mark as invalid
-            // Return expansion (trend-like state) instead of unknown
-            DebugRegimeLogFile("DetectCurrentState", "Range weak, returning STATE_EXPANSION (trend-like)");
-            Logger::Log("MarketRegime", "Market State: EXPANSION (Weak range breaking out)", true, false);
-            return STATE_EXPANSION;
-         }
-      }
-
-      // Decision matrix - FIRST PASS: Clear cases
-      // 1. Check for Contraction/Squeeze (STATE_CONTRACTION) - treat as RANGE
+      // 1. Contraction/Squeeze
       if (volatilityLow && !volatilityRising && adx < m_adxContraction && rangeTouches < m_rangeTouchesWeak)
       {
-         DebugRegimeLogFile("DetectCurrentState", "Detected STATE_CONTRACTION (treat as RANGE)");
-         Logger::Log("MarketRegime", "Market State: CONTRACTION (Volatility squeeze - RANGE)", true, false);
-         return STATE_CONTRACTION; // Contraction is a ranging state
+         DebugRegimeLogFile("DetectCurrentState", StringFormat("Instance #%d | Clear case: STATE_CONTRACTION", m_instanceId));
+         return ApplyHysteresis(STATE_CONTRACTION);
       }
 
-      // 2. Check for Expansion/Breakout (STATE_EXPANSION) - treat as TREND
-      if (HasRangeBroken(currentPrice) &&
-          MathAbs(priceChange) > atr * 2)
+      // 2. Expansion/Breakout
+      if (HasRangeBroken(currentPrice) && MathAbs(priceChange) > atr * 2)
       {
-         DebugRegimeLogFile("DetectCurrentState", "Detected STATE_EXPANSION (treat as TREND)");
-         Logger::Log("MarketRegime", "Market State: EXPANSION (Breakout detected - TREND)", true, false);
-         return STATE_EXPANSION; // Expansion is a trend state
+         DebugRegimeLogFile("DetectCurrentState", StringFormat("Instance #%d | Clear case: STATE_EXPANSION", m_instanceId));
+         return ApplyHysteresis(STATE_EXPANSION);
       }
 
-      // 3. Check for Churn/Exhaustion (STATE_CHURN) - treat as RANGE
-      if (volatilityHigh && volatilityRising && adx > m_adxExhaustion &&
-          MathAbs(priceChange) < atr * 0.5)
+      // 3. Churn/Exhaustion
+      if (volatilityHigh && volatilityRising && adx > m_adxExhaustion && MathAbs(priceChange) < atr * 0.5)
       {
-         DebugRegimeLogFile("DetectCurrentState", "Detected STATE_CHURN (treat as RANGE)");
-         Logger::Log("MarketRegime", "Market State: CHURN (Exhaustion phase - RANGE)", true, false);
-         return STATE_CHURN; // Churn is a ranging state
+         DebugRegimeLogFile("DetectCurrentState", StringFormat("Instance #%d | Clear case: STATE_CHURN", m_instanceId));
+         return ApplyHysteresis(STATE_CHURN);
       }
 
-      // ========== ADD RANGE STRENGTH CHECK ==========
-      // Check if price is respecting range boundaries
-      bool priceNearRangeBoundary = false;
-      if (m_rangeActive)
+      // ==================== STEP 9: FIX - MA50 OVERRIDE LOGIC ====================
+      // CRITICAL FIX: When price is trending away from MA50, override range
+      // CHANGED: Lowered threshold from m_priceFarFromMA (1.0%) to 0.5%
+      if (isTrendingStructure && MathAbs(priceVsMA) > 0.5)
       {
-         double rangeHeight = m_fixedRangeTop - m_fixedRangeBottom;
-         double pricePosition = (currentPrice - m_fixedRangeBottom) / rangeHeight;
+         // Check MA alignment
+         bool maAlignedBullish = (currentPrice > ma50 && maSlope > 0);
+         bool maAlignedBearish = (currentPrice < ma50 && maSlope < 0);
 
-         // Price near top or bottom (within 15% of boundary)
-         if (pricePosition < 0.15 || pricePosition > 0.85)
+         if ((maAlignedBullish || maAlignedBearish) && MathAbs(maSlope) > 0.0001)
          {
-            priceNearRangeBoundary = true;
-            rangeBias = MathMin(1.0, rangeBias + 0.4);
-         }
+            // Strong trend away from MA - override range
+            if (hasActiveRange)
+            {
+               DebugRegimeLogFile("DetectCurrentState",
+                                  StringFormat("Instance #%d | MA50 TREND OVERRIDE: Price %.2f%% from MA50 with slope %.5f",
+                                               m_instanceId, priceVsMA, maSlope));
+            }
 
-         // Multiple range touches = stronger range
-         if (rangeTouches >= m_rangeTouchesStrong)
-         {
-            rangeBias = MathMin(1.0, rangeBias + 0.3);
+            // Return trending state based on volatility
+            ENUM_MARKET_STATE trendState = (volatilityHigh) ? STATE_TRENDING_HIGH_VOL : STATE_TRENDING_LOW_VOL;
+            return ApplyHysteresis(trendState);
          }
       }
 
-      // ========== BALANCED DECISION MAKING ==========
+      // ==================== STEP 10: FIXED DECISION LOGIC ====================
+      // Simple scoring based on your existing logic
+      double trendScore = 0;
+      double rangeScore = 0;
 
-      // 4. Check trending states WITH BIAS CONSIDERATION
+      // TREND FACTORS (MORE CONSERVATIVE)
+      if (adx >= 30)
+         trendScore += 0.5; // Strong trend
+      else if (adx >= 25)
+         trendScore += 0.3; // Moderate trend
+      else if (adx >= 20)
+         trendScore += 0.1; // Weak trend (barely counts)
+
       if (isTrendingStructure)
-      {
-         if (adx >= m_adxTrendingThreshold) // ADX >= threshold (default 25)
-         {
-            // Apply trend bias from MA50 analysis
-            double trendStrength = adx / 100.0; // Normalize ADX 0-1
-            double finalTrendScore = trendStrength + (trendBias * 0.25) - (rangeBias * 0.35);
+         trendScore += 0.3;
 
-            // Need reasonable trend strength even with MA bias
-            if (finalTrendScore > 0.45) // higher score to make harder for trend to qualify
-            {
-               // Healthy trend
-               if (volatilityLow || volatilityScore < 0.5)
-               {
-                  DebugRegimeLogFile("DetectCurrentState", "Detected STATE_TRENDING_LOW_VOL");
-                  Logger::Log("MarketRegime", "Market State: TRENDING_LOW_VOL (Healthy trend)", true, false);
-                  return STATE_TRENDING_LOW_VOL;
-               }
-               else
-               {
-                  DebugRegimeLogFile("DetectCurrentState", "Detected STATE_TRENDING_HIGH_VOL");
-                  Logger::Log("MarketRegime", "Market State: TRENDING_HIGH_VOL (High vol trend)", true, false);
-                  return STATE_TRENDING_HIGH_VOL;
-               }
-            }
-         }
-         else if (adx > m_adxExhaustion) // ADX > exhaustion threshold
-         {
-            // Exhaustion trend
-            DebugRegimeLogFile("DetectCurrentState", "Detected STATE_TRENDING_HIGH_VOL (Exhaustion)");
-            Logger::Log("MarketRegime", "Market State: TRENDING_HIGH_VOL (Exhaustion)", true, false);
-            return STATE_TRENDING_HIGH_VOL;
-         }
+      // PriceVsMA: Only count if STRONGLY away from MA50
+      if (MathAbs(priceVsMA) > 1.0)
+         trendScore += 0.3; // Very far
+      else if (MathAbs(priceVsMA) > 0.7)
+         trendScore += 0.2; // Far
+      else if (MathAbs(priceVsMA) > 0.5)
+         trendScore += 0.1; // Somewhat far
+
+      // RANGE FACTORS (WITH ADX CONTEXT)
+      if (hasActiveRange)
+      {
+         // Range strength DEPENDS on ADX level
+         if (adx < 15)
+            rangeScore += 0.7; // Strong range (low ADX)
+         else if (adx < 20)
+            rangeScore += 0.5; // Moderate range
+         else if (adx < 25)
+            rangeScore += 0.3; // Weak range (ADX rising)
+         else
+            rangeScore += 0.1; // Very weak (ADX ≥ 25)
       }
 
-      // 5. Check ranging states WITH BIAS CONSIDERATION
-      // SIMPLIFIED RANGING LOGIC
-      if (m_rangeActive && m_cache.priceInRange)
-      {
-         // Check range strength
-         if (!(rangeTouches < m_rangeTouchesWeak)) // Range has been respected (>=2 touches)
-         {
-            // Simple: If in range and price is within it, we're ranging
-            if (volatilityHigh)
-            {
-               DebugRegimeLogFile("DetectCurrentState", "Detected STATE_RANGING_HIGH_VOL");
-               Logger::Log("MarketRegime", "Market State: RANGING_HIGH_VOL (High volatility range)", true, false);
-               return STATE_RANGING_HIGH_VOL;
-            }
-            else
-            {
-               DebugRegimeLogFile("DetectCurrentState", "Detected STATE_RANGING_LOW_VOL");
-               Logger::Log("MarketRegime", "Market State: RANGING_LOW_VOL (Low volatility range)", true, false);
-               return STATE_RANGING_LOW_VOL;
-            }
-         }
-      }
+      if (rangeTouches >= m_rangeTouchesStrong)
+         rangeScore += 0.3;
 
-      // ========== TIE-BREAKER: If both trend and range have similar scores ==========
-      if (isTrendingStructure && m_rangeActive)
-      {
-         DebugRegimeLogFile("DetectCurrentState", "Running tie-breaker logic (both trend and range possible)");
+      // MA50 PROXIMITY - HEAVILY WEIGHTED for range
+      if (MathAbs(priceVsMA) < 0.25)
+         rangeScore += 0.4; // Very close
+      else if (MathAbs(priceVsMA) < 0.5)
+         rangeScore += 0.2;
+      else if (MathAbs(priceVsMA) < 1.0)
+         rangeScore += 0.1;
 
-         // ========== BALANCED SCORING ==========
-         // Trend factors (0-1 scale)
-         double trendADX = MathMin(1.0, adx / 100.0);             // ADX contribution
-         double trendPriceMA = MathMin(0.3, priceVsMA / 3.0);     // Price distance from MA50
-         double trendStructure = isTrendingStructure ? 0.4 : 0.1; // Price structure
-
-         // Range factors (0-1 scale)
-         double rangeActive = m_rangeActive ? 0.5 : 0.0;              // Range is active
-         double rangeTouchesScore = MathMin(0.3, rangeTouches * 0.1); // Range touches
-         double rangePositionScore = 0.0;
-
-         // Calculate price position in range (if in range)
-         if (m_rangeActive)
-         {
-            double rangeHeight = m_fixedRangeTop - m_fixedRangeBottom;
-            double pricePosition = (currentPrice - m_fixedRangeBottom) / rangeHeight;
-            // Price in middle of range = stronger range evidence
-            if (pricePosition > 0.3 && pricePosition < 0.7)
-               rangePositionScore = 0.2;
-         }
-
-         // Composite scores with BALANCED weights
-         double trendScore = (trendADX * 0.5) + (trendPriceMA * 0.3) + (trendStructure * 0.2);
-         double rangeScore = (rangeActive * 0.4) + (rangeTouchesScore * 0.3) + (rangePositionScore * 0.3);
-
-         DebugRegimeLogFile("DetectCurrentState",
-                            StringFormat("Tie-breaker scores: Trend=%.2f, Range=%.2f", trendScore, rangeScore));
-
-         // ========== DECISION WITH THRESHOLDS ==========
-         // Both need reasonable minimum scores
-         bool trendValid = trendScore >= 0.3;
-         bool rangeValid = rangeScore >= 0.3;
-
-         if (trendValid && !rangeValid)
-         {
-            // Clear trend
-            if (volatilityLow || volatilityScore < 0.5)
-            {
-               DebugRegimeLogFile("DetectCurrentState", "Tie-breaker: Clear trend (TRENDING_LOW_VOL)");
-               return STATE_TRENDING_LOW_VOL;
-            }
-            else
-            {
-               DebugRegimeLogFile("DetectCurrentState", "Tie-breaker: Clear trend (TRENDING_HIGH_VOL)");
-               return STATE_TRENDING_HIGH_VOL;
-            }
-         }
-         else if (rangeValid && !trendValid)
-         {
-            // Clear range
-            if (volatilityHigh)
-            {
-               DebugRegimeLogFile("DetectCurrentState", "Tie-breaker: Clear range (RANGING_HIGH_VOL)");
-               return STATE_RANGING_HIGH_VOL;
-            }
-            else
-            {
-               DebugRegimeLogFile("DetectCurrentState", "Tie-breaker: Clear range (RANGING_LOW_VOL)");
-               return STATE_RANGING_LOW_VOL;
-            }
-         }
-         else if (trendValid && rangeValid)
-         {
-            // Both valid - check dominance
-            double scoreDifference = trendScore - rangeScore;
-
-            // Trend needs to be SIGNIFICANTLY stronger (>0.15) to win
-            if (scoreDifference > 0.15) // Changed from 0.2 to 0.15
-            {
-               if (volatilityLow || volatilityScore < 0.5)
-               {
-                  DebugRegimeLogFile("DetectCurrentState", "Tie-breaker: Trend dominant (TRENDING_LOW_VOL)");
-                  return STATE_TRENDING_LOW_VOL;
-               }
-               else
-               {
-                  DebugRegimeLogFile("DetectCurrentState", "Tie-breaker: Trend dominant (TRENDING_HIGH_VOL)");
-                  return STATE_TRENDING_HIGH_VOL;
-               }
-            }
-            // Range needs to be SIGNIFICANTLY stronger to win
-            else if (scoreDifference < -0.15) // Range needs larger numbers for advantage
-            {
-               if (volatilityHigh)
-               {
-                  DebugRegimeLogFile("DetectCurrentState", "Tie-breaker: Range dominant (RANGING_HIGH_VOL)");
-                  return STATE_RANGING_HIGH_VOL;
-               }
-               else
-               {
-                  DebugRegimeLogFile("DetectCurrentState", "Tie-breaker: Range dominant (RANGING_LOW_VOL)");
-                  return STATE_RANGING_LOW_VOL;
-               }
-            }
-            // Close scores = check additional factors
-            else
-            {
-               DebugRegimeLogFile("DetectCurrentState", "Tie-breaker: Close scores, checking additional factors");
-
-               // Close call - check additional factors
-               // 1. Check ADX strength
-               if (adx >= 30)
-               {
-                  // Strong ADX favors trend
-                  if (volatilityLow || volatilityScore < 0.5)
-                  {
-                     DebugRegimeLogFile("DetectCurrentState", "Tie-breaker: ADX favors trend (TRENDING_LOW_VOL)");
-                     return STATE_TRENDING_LOW_VOL;
-                  }
-                  else
-                  {
-                     DebugRegimeLogFile("DetectCurrentState", "Tie-breaker: ADX favors trend (TRENDING_HIGH_VOL)");
-                     return STATE_TRENDING_HIGH_VOL;
-                  }
-               }
-               // 2. Check volatility context
-               else if (volatilityHigh)
-               {
-                  // High volatility favors range (noisy)
-                  DebugRegimeLogFile("DetectCurrentState", "Tie-breaker: High vol favors range (RANGING_HIGH_VOL)");
-                  return STATE_RANGING_HIGH_VOL;
-               }
-               // 3. Check recent price action
-               else
-               {
-                  // Default to range for safety (as requested)
-                  DebugRegimeLogFile("DetectCurrentState", "Tie-breaker: Default to range (RANGING_LOW_VOL)");
-                  return STATE_RANGING_LOW_VOL;
-               }
-            }
-         }
-      }
-
-      // ========== FINAL DECISION: NO UNKNOWN STATES ==========
-      // If we get here, we need to make a definitive choice
-
-      // Check if we have ANY range evidence
-      bool hasRangeEvidence = m_rangeActive || rangeTouches > 0 || volatilityHigh || priceVsMA < m_priceNearMA;
-
-      // Check if we have ANY trend evidence
-      bool hasTrendEvidence = adx > 20 || isTrendingStructure || priceVsMA > m_priceFarFromMA;
+      // EXTRA: Pullback to MA50 detection
+      if (IsPricePulledBackToMA50())
+         rangeScore += 0.3;
 
       DebugRegimeLogFile("DetectCurrentState",
-                         StringFormat("Final decision: RangeEvidence=%s, TrendEvidence=%s, PriceVsMA=%.2f%%, Volatility=%.2f, ADX=%.1f",
-                                      hasRangeEvidence ? "YES" : "NO",
-                                      hasTrendEvidence ? "YES" : "NO",
-                                      priceVsMA, volatilityScore, adx));
+                         StringFormat("Instance #%d | Fixed Scores: Trend=%.2f, Range=%.2f",
+                                      m_instanceId, trendScore, rangeScore));
 
-      // DECISION RULES (prioritize RANGE when unclear):
-      // 1. If we have ANY range evidence, favor RANGE
-      // 2. If ADX is low (<threshold) and volatility is not high, favor RANGE
-      // 3. Only return TREND if we have strong evidence
-
-      if (hasRangeEvidence || adx < m_adxTrendingThreshold || volatilityScore < 0.6)
+      // Clear Trend case - CHANGED: Lowered threshold from 0.7 to 0.6
+      if (trendScore >= 0.6 && rangeScore <= 0.4)
       {
-         // Favor RANGE (safer default)
-         if (volatilityHigh)
+         DebugRegimeLogFile("DetectCurrentState", StringFormat("Instance #%d | Clear trend detected", m_instanceId));
+         ENUM_MARKET_STATE trendState = (volatilityHigh) ? STATE_TRENDING_HIGH_VOL : STATE_TRENDING_LOW_VOL;
+         return ApplyHysteresis(trendState);
+      }
+
+      // Clear Range case
+      if (rangeScore >= 0.7 && trendScore <= 0.3)
+      {
+         DebugRegimeLogFile("DetectCurrentState", StringFormat("Instance #%d | Clear range detected", m_instanceId));
+         ENUM_MARKET_STATE rangeState = (volatilityHigh) ? STATE_RANGING_HIGH_VOL : STATE_RANGING_LOW_VOL;
+         return ApplyHysteresis(rangeState);
+      }
+
+      // ==================== STEP 11: CONFLICT RESOLUTION ====================
+      // Both signals exist (ambiguous case)
+      if (trendScore > 0.5 && rangeScore > 0.5)
+      {
+         DebugRegimeLogFile("DetectCurrentState",
+                            StringFormat("Instance #%d | CONFLICT DETECTED: Trend=%.2f, Range=%.2f",
+                                         m_instanceId, trendScore, rangeScore));
+
+         // RULE 1: ADX > 25 favors trend
+         if (adx >= 25)
          {
-            DebugRegimeLogFile("DetectCurrentState", "Ambiguous: Favoring STATE_RANGING_HIGH_VOL (safety default)");
-            Logger::Log("MarketRegime", "Market State: RANGING_HIGH_VOL (ambiguous, safety default)", true, false);
-            return STATE_RANGING_HIGH_VOL;
+            DebugRegimeLogFile("DetectCurrentState",
+                               StringFormat("Instance #%d | Conflict resolved by ADX (%.1f) - TREND wins",
+                                            m_instanceId, adx));
+            ENUM_MARKET_STATE trendState = (volatilityHigh) ? STATE_TRENDING_HIGH_VOL : STATE_TRENDING_LOW_VOL;
+            return ApplyHysteresis(trendState);
          }
-         else
+
+         // RULE 2: Strong MA separation favors trend - CHANGED: Lowered from 1.0% to 0.5%
+         if (MathAbs(priceVsMA) > 0.5 && isTrendingStructure)
          {
-            DebugRegimeLogFile("DetectCurrentState", "Ambiguous: Favoring STATE_RANGING_LOW_VOL (safety default)");
-            Logger::Log("MarketRegime", "Market State: RANGING_LOW_VOL (ambiguous, safety default)", true, false);
-            return STATE_RANGING_LOW_VOL;
+            DebugRegimeLogFile("DetectCurrentState",
+                               StringFormat("Instance #%d | Conflict resolved by PriceVsMA (%.2f%%) - TREND wins",
+                                            m_instanceId, priceVsMA));
+            ENUM_MARKET_STATE trendState = (volatilityHigh) ? STATE_TRENDING_HIGH_VOL : STATE_TRENDING_LOW_VOL;
+            return ApplyHysteresis(trendState);
          }
+
+         // RULE 3: Default to trend if structure is trending
+         if (isTrendingStructure)
+         {
+            DebugRegimeLogFile("DetectCurrentState",
+                               StringFormat("Instance #%d | Conflict resolved by trending structure - TREND wins",
+                                            m_instanceId));
+            ENUM_MARKET_STATE trendState = (volatilityHigh) ? STATE_TRENDING_HIGH_VOL : STATE_TRENDING_LOW_VOL;
+            return ApplyHysteresis(trendState);
+         }
+
+         // RULE 4: Otherwise, range wins
+         DebugRegimeLogFile("DetectCurrentState",
+                            StringFormat("Instance #%d | Conflict resolved: RANGE wins by default",
+                                         m_instanceId));
+         ENUM_MARKET_STATE rangeState = (volatilityHigh) ? STATE_RANGING_HIGH_VOL : STATE_RANGING_LOW_VOL;
+         return ApplyHysteresis(rangeState);
+      }
+
+      // ==================== STEP 12: FINAL DECISION ====================
+      // If we reach here, choose based on which score is higher
+      ENUM_MARKET_STATE finalState;
+
+      if (trendScore > rangeScore)
+      {
+         DebugRegimeLogFile("DetectCurrentState",
+                            StringFormat("Instance #%d | Trend wins (%.2f vs %.2f)",
+                                         m_instanceId, trendScore, rangeScore));
+         finalState = (volatilityHigh) ? STATE_TRENDING_HIGH_VOL : STATE_TRENDING_LOW_VOL;
       }
       else
       {
-         // Strong trend evidence
-         if (volatilityLow || volatilityScore < 0.5)
-         {
-            DebugRegimeLogFile("DetectCurrentState", "Ambiguous but strong trend evidence: STATE_TRENDING_LOW_VOL");
-            Logger::Log("MarketRegime", "Market State: TRENDING_LOW_VOL (strong evidence)", true, false);
-            return STATE_TRENDING_LOW_VOL;
-         }
-         else
-         {
-            DebugRegimeLogFile("DetectCurrentState", "Ambiguous but strong trend evidence: STATE_TRENDING_HIGH_VOL");
-            Logger::Log("MarketRegime", "Market State: TRENDING_HIGH_VOL (strong evidence)", true, false);
-            return STATE_TRENDING_HIGH_VOL;
-         }
+         DebugRegimeLogFile("DetectCurrentState",
+                            StringFormat("Instance #%d | Range wins (%.2f vs %.2f)",
+                                         m_instanceId, rangeScore, trendScore));
+         finalState = (volatilityHigh) ? STATE_RANGING_HIGH_VOL : STATE_RANGING_LOW_VOL;
       }
+
+      return ApplyHysteresis(finalState);
    }
 
    //+------------------------------------------------------------------+
-   //| CHECK AND INVALIDATE RANGE METHOD                                |
+   //| CHECK AND INVALIDATE RANGE METHOD - WITH ENHANCED DEBUGGING     |
    //+------------------------------------------------------------------+
    void CheckAndInvalidateRange()
    {
+      DebugRegimeLogFile("CheckAndInvalidateRange", StringFormat("Instance #%d | === STARTING RANGE INVALIDATION ===", m_instanceId));
+
       if (!m_cache.rangeActive)
       {
-         DebugRegimeLogFile("CheckAndInvalidateRange", "Range not active, nothing to invalidate");
+         DebugRegimeLogFile("CheckAndInvalidateRange", StringFormat("Instance #%d | Range not active, skipping", m_instanceId));
          return;
       }
 
-      DebugRegimeLogFile("CheckAndInvalidateRange", "=== STARTING INVALIDATION CHECKS ===");
       DebugRegimeLogFile("CheckAndInvalidateRange",
-                         StringFormat("Current: %.5f, Range: %.5f-%.5f, Width: %.5f",
-                                      m_cache.currentPrice, m_fixedRangeBottom, m_fixedRangeTop,
+                         StringFormat("Instance #%d | Checking: Price=%.5f, Range=%.5f-%.5f, Width=%.5f",
+                                      m_instanceId, m_cache.currentPrice, m_fixedRangeBottom, m_fixedRangeTop,
                                       m_fixedRangeTop - m_fixedRangeBottom));
 
       double currentPrice = m_cache.currentPrice;
 
       // ========== RULE 1: Consecutive closes outside range ==========
-      DebugRegimeLogFile("CheckAndInvalidateRange", "--- RULE 1: Consecutive closes outside range ---");
+      DebugRegimeLogFile("CheckAndInvalidateRange", StringFormat("Instance #%d | RULE 1: Consecutive closes outside range", m_instanceId));
       int consecutiveOutside = 0;
       string barStatus = "";
       for (int i = 0; i < 3; i++)
@@ -1012,23 +1343,23 @@ private:
       }
 
       DebugRegimeLogFile("CheckAndInvalidateRange",
-                         StringFormat("Bar status: %s", barStatus));
+                         StringFormat("Instance #%d | Bar status: %s", m_instanceId, barStatus));
       DebugRegimeLogFile("CheckAndInvalidateRange",
-                         StringFormat("Consecutive outside: %d/2 needed", consecutiveOutside));
+                         StringFormat("Instance #%d | Consecutive outside: %d/2 needed", m_instanceId, consecutiveOutside));
 
       if (consecutiveOutside >= 2)
       {
-         DebugRegimeLogFile("CheckAndInvalidateRange", "✅ RULE 1 TRIGGERED: 2+ consecutive closes outside range");
+         DebugRegimeLogFile("CheckAndInvalidateRange", StringFormat("Instance #%d | RULE 1 TRIGGERED: 2+ consecutive closes outside range", m_instanceId));
          InvalidateRange("2+ consecutive closes outside range");
          return;
       }
       else
       {
-         DebugRegimeLogFile("CheckAndInvalidateRange", "❌ RULE 1 NOT MET: Need 2 consecutive outside");
+         DebugRegimeLogFile("CheckAndInvalidateRange", StringFormat("Instance #%d | RULE 1 NOT MET: Need 2 consecutive outside", m_instanceId));
       }
 
       // ========== RULE 2: Strong momentum break with ATR expansion ==========
-      DebugRegimeLogFile("CheckAndInvalidateRange", "--- RULE 2: Strong momentum breakout ---");
+      DebugRegimeLogFile("CheckAndInvalidateRange", StringFormat("Instance #%d | RULE 2: Strong momentum breakout", m_instanceId));
       double atr = m_cache.atr;
       double atr_5 = GetATRValue(14, 5);
       double priceChange = GetPriceChange(3);
@@ -1037,38 +1368,38 @@ private:
       bool strongMomentum = MathAbs(priceChange) > atr * 1.5;
 
       DebugRegimeLogFile("CheckAndInvalidateRange",
-                         StringFormat("HasRangeBroken: %s (Current: %.5f, Top+Buf: %.5f, Bot-Buf: %.5f)",
-                                      hasBroken ? "YES" : "NO",
+                         StringFormat("Instance #%d | HasRangeBroken: %s (Current: %.5f, Top+Buf: %.5f, Bot-Buf: %.5f)",
+                                      m_instanceId, hasBroken ? "YES" : "NO",
                                       currentPrice,
                                       m_fixedRangeTop + (atr * 0.5),
                                       m_fixedRangeBottom - (atr * 0.5)));
       DebugRegimeLogFile("CheckAndInvalidateRange",
-                         StringFormat("ATR Expansion: %.5f > %.5f*1.2 = %.5f? %s",
-                                      atr, atr_5, atr_5 * 1.2, atrExpanded ? "YES" : "NO"));
+                         StringFormat("Instance #%d | ATR Expansion: %.5f > %.5f*1.2 = %.5f? %s",
+                                      m_instanceId, atr, atr_5, atr_5 * 1.2, atrExpanded ? "YES" : "NO"));
       DebugRegimeLogFile("CheckAndInvalidateRange",
-                         StringFormat("Momentum: |%.2f%%| > %.5f*1.5 = %.5f? %s",
-                                      priceChange, atr, atr * 1.5, strongMomentum ? "YES" : "NO"));
+                         StringFormat("Instance #%d | Momentum: |%.2f%%| > %.5f*1.5 = %.5f? %s",
+                                      m_instanceId, priceChange, atr, atr * 1.5, strongMomentum ? "YES" : "NO"));
 
       bool strongBreakout = hasBroken && atrExpanded && strongMomentum;
 
       if (strongBreakout)
       {
          DebugRegimeLogFile("CheckAndInvalidateRange",
-                            "✅ RULE 2 TRIGGERED: Strong momentum breakout with ATR expansion");
+                            StringFormat("Instance #%d | RULE 2 TRIGGERED: Strong momentum breakout with ATR expansion", m_instanceId));
          InvalidateRange("Strong momentum breakout with ATR expansion");
          return;
       }
       else
       {
          DebugRegimeLogFile("CheckAndInvalidateRange",
-                            StringFormat("❌ RULE 2 NOT MET: hasBroken=%s, ATRexp=%s, Momentum=%s",
-                                         hasBroken ? "YES" : "NO",
+                            StringFormat("Instance #%d | RULE 2 NOT MET: hasBroken=%s, ATRexp=%s, Momentum=%s",
+                                         m_instanceId, hasBroken ? "YES" : "NO",
                                          atrExpanded ? "YES" : "NO",
                                          strongMomentum ? "YES" : "NO"));
       }
 
       // ========== RULE 3: MA confirms trend (not range) ==========
-      DebugRegimeLogFile("CheckAndInvalidateRange", "--- RULE 3: MA confirms trend ---");
+      DebugRegimeLogFile("CheckAndInvalidateRange", StringFormat("Instance #%d | RULE 3: MA confirms trend", m_instanceId));
       double ma50 = m_cache.ma50;
       double adx = m_cache.adx;
 
@@ -1085,20 +1416,20 @@ private:
          bool adxConfirms = adx >= m_adxTrendConfirmation;
 
          DebugRegimeLogFile("CheckAndInvalidateRange",
-                            StringFormat("MA50: %.5f, Current: %.5f, Distance: %.5f (%.2f%%)",
-                                         ma50, currentPrice, priceDistance, (priceDistance / ma50 * 100)));
+                            StringFormat("Instance #%d | MA50: %.5f, Current: %.5f, Distance: %.5f (%.2f%%)",
+                                         m_instanceId, ma50, currentPrice, priceDistance, (priceDistance / ma50 * 100)));
          DebugRegimeLogFile("CheckAndInvalidateRange",
-                            StringFormat("AwayFromMA50: %.5f > %.5f? %s",
-                                         priceDistance, atr, awayFromMA50 ? "YES" : "NO"));
+                            StringFormat("Instance #%d | AwayFromMA50: %.5f > %.5f? %s",
+                                         m_instanceId, priceDistance, atr, awayFromMA50 ? "YES" : "NO"));
          DebugRegimeLogFile("CheckAndInvalidateRange",
-                            StringFormat("PrevAwayFromMA50: %.5f > %.5f? %s",
-                                         MathAbs(prevPrice - prevMA50), atr * 0.8, prevAwayFromMA50 ? "YES" : "NO"));
+                            StringFormat("Instance #%d | PrevAwayFromMA50: %.5f > %.5f? %s",
+                                         m_instanceId, MathAbs(prevPrice - prevMA50), atr * 0.8, prevAwayFromMA50 ? "YES" : "NO"));
          DebugRegimeLogFile("CheckAndInvalidateRange",
-                            StringFormat("Trend: Bullish=%s, Bearish=%s",
-                                         bullishTrend ? "YES" : "NO", bearishTrend ? "YES" : "NO"));
+                            StringFormat("Instance #%d | Trend: Bullish=%s, Bearish=%s",
+                                         m_instanceId, bullishTrend ? "YES" : "NO", bearishTrend ? "YES" : "NO"));
          DebugRegimeLogFile("CheckAndInvalidateRange",
-                            StringFormat("ADX Confirmation: %.1f >= %.1f? %s",
-                                         adx, m_adxTrendConfirmation, adxConfirms ? "YES" : "NO"));
+                            StringFormat("Instance #%d | ADX Confirmation: %.1f >= %.1f? %s",
+                                         m_instanceId, adx, m_adxTrendConfirmation, adxConfirms ? "YES" : "NO"));
 
          if ((bullishTrend || bearishTrend) && awayFromMA50 && prevAwayFromMA50 && adxConfirms)
          {
@@ -1106,22 +1437,66 @@ private:
             string message = StringFormat("Price %s away from MA50 (Distance: %.2f%%, ATR: %.5f)",
                                           trendType, (priceDistance / ma50 * 100), atr);
             DebugRegimeLogFile("CheckAndInvalidateRange",
-                               StringFormat("✅ RULE 3 TRIGGERED: %s", message));
+                               StringFormat("Instance #%d | RULE 3 TRIGGERED: %s", m_instanceId, message));
             InvalidateRange(message);
             return;
          }
          else
          {
             DebugRegimeLogFile("CheckAndInvalidateRange",
-                               "❌ RULE 3 NOT MET: One or more conditions failed");
+                               StringFormat("Instance #%d | RULE 3 NOT MET: One or more conditions failed", m_instanceId));
          }
       }
       else
       {
-         DebugRegimeLogFile("CheckAndInvalidateRange", "❌ RULE 3 SKIPPED: Invalid MA50 value");
+         DebugRegimeLogFile("CheckAndInvalidateRange", StringFormat("Instance #%d | RULE 3 SKIPPED: Invalid MA50 value", m_instanceId));
       }
 
-      DebugRegimeLogFile("CheckAndInvalidateRange", "✅ ALL INVALIDATION CHECKS PASSED - Range remains active");
+      DebugRegimeLogFile("CheckAndInvalidateRange", StringFormat("Instance #%d | ALL INVALIDATION CHECKS PASSED - Range remains active", m_instanceId));
+   }
+
+   //+------------------------------------------------------------------+
+   //| INVALIDATE RANGE HELPER - WITH CRITICAL CACHE SYNC              |
+   //+------------------------------------------------------------------+
+   void InvalidateRange(string reason)
+   {
+      DebugRegimeLogFile("InvalidateRange", StringFormat("Instance #%d | === STARTING RANGE INVALIDATION ===", m_instanceId));
+
+      // CRITICAL DEBUG: Log before state changes
+      DebugRegimeLogFile("InvalidateRange",
+                         StringFormat("Instance #%d | BEFORE: m_rangeActive=%s, cache.rangeActive=%s, cache.priceInRange=%s",
+                                      m_instanceId, m_rangeActive ? "true" : "false",
+                                      m_cache.rangeActive ? "true" : "false",
+                                      m_cache.priceInRange ? "true" : "false"));
+
+      m_rangeActive = false;
+
+      // CRITICAL: Update cache immediately
+      m_cache.rangeActive = false;
+      m_cache.priceInRange = false;
+
+      // CRITICAL DEBUG: Log after state changes
+      DebugRegimeLogFile("InvalidateRange",
+                         StringFormat("Instance #%d | AFTER: m_rangeActive=%s, cache.rangeActive=%s, cache.priceInRange=%s",
+                                      m_instanceId, m_rangeActive ? "true" : "false",
+                                      m_cache.rangeActive ? "true" : "false",
+                                      m_cache.priceInRange ? "true" : "false"));
+
+      m_lastInvalidationTime = iTime(m_symbol, m_timeframe, 0);
+
+      string invalidationMsg = StringFormat("Instance #%d | Range Invalidated: %s (Cooldown: %d bars)",
+                                            m_instanceId, reason, m_invalidationCooldownBars);
+
+      // Log using debug wrapper
+      DebugRegimePrint("RangeInvalidation", invalidationMsg);
+
+      // Log trade event for range invalidation
+      if (DEBUG_REGIME_ENABLED)
+      {
+         DebugRegimeLogFile("Range",
+                            StringFormat("Instance #%d | Range invalidated: %s | Price: %.5f",
+                                         m_instanceId, reason, iClose(m_symbol, m_timeframe, 0)));
+      }
    }
 
    bool IsPriceInFixedRange(double price)
@@ -1138,12 +1513,12 @@ private:
    {
       if (!m_rangeActive)
       {
-         DebugRegimeLogFile("HasRangeBroken", "Range not active, cannot be broken");
+         DebugRegimeLogFile("HasRangeBroken", StringFormat("Instance #%d | Range not active, cannot be broken", m_instanceId));
          return false;
       }
 
       double atr = m_cache.atr;
-      double margin = atr * 0.5;
+      double margin = atr * Inp_Breakout_Margin_Multiplier;
       double upperBreakLevel = m_fixedRangeTop + margin;
       double lowerBreakLevel = m_fixedRangeBottom - margin;
 
@@ -1152,39 +1527,17 @@ private:
       bool broken = brokenAbove || brokenBelow;
 
       DebugRegimeLogFile("HasRangeBroken",
-                         StringFormat("Price: %.5f, Range: %.5f-%.5f, Margin: %.5f, Upper: %.5f, Lower: %.5f",
-                                      price, m_fixedRangeBottom, m_fixedRangeTop, margin,
+                         StringFormat("Instance #%d | Price: %.5f, Range: %.5f-%.5f, Margin: %.5f, Upper: %.5f, Lower: %.5f",
+                                      m_instanceId, price, m_fixedRangeBottom, m_fixedRangeTop, margin,
                                       upperBreakLevel, lowerBreakLevel));
       DebugRegimeLogFile("HasRangeBroken",
-                         StringFormat("Broken Above: %.5f > %.5f? %s",
-                                      price, upperBreakLevel, brokenAbove ? "YES" : "NO"));
+                         StringFormat("Instance #%d | Broken Above: %.5f > %.5f? %s",
+                                      m_instanceId, price, upperBreakLevel, brokenAbove ? "YES" : "NO"));
       DebugRegimeLogFile("HasRangeBroken",
-                         StringFormat("Broken Below: %.5f < %.5f? %s",
-                                      price, lowerBreakLevel, brokenBelow ? "YES" : "NO"));
+                         StringFormat("Instance #%d | Broken Below: %.5f < %.5f? %s",
+                                      m_instanceId, price, lowerBreakLevel, brokenBelow ? "YES" : "NO"));
 
       return broken;
-   }
-
-   //+------------------------------------------------------------------+
-   //| INVALIDATE RANGE HELPER                                          |
-   //+------------------------------------------------------------------+
-   void InvalidateRange(string reason)
-   {
-      DebugRegimeLogFile("InvalidateRange", StringFormat("Invalidating range: %s", reason));
-
-      m_rangeActive = false;
-      m_cache.rangeActive = false; // Update cache
-      m_lastInvalidationTime = iTime(m_symbol, m_timeframe, 0);
-
-      string invalidationMsg = StringFormat("Range Invalidated: %s (Cooldown: %d bars)",
-                                            reason, m_invalidationCooldownBars);
-
-      Print(invalidationMsg);
-      Logger::Log("MarketRegime", invalidationMsg, true, true);
-      DebugRegimeLogFile("InvalidateRange", invalidationMsg);
-
-      // Log trade event for range invalidation
-      Logger::LogTrade("Range", m_symbol, "INVALIDATE", 0, iClose(m_symbol, m_timeframe, 0));
    }
 
    string GetPositionSizeString(ENUM_POSITION_SIZE size)
@@ -1208,48 +1561,49 @@ private:
 
    double GetMAValue(int period, int shift = 0)
    {
+      DebugRegimeLogFile("GetMAValue", StringFormat("Requested: MA%d shift %d", period, shift));
+
+      // ✅ Check for valid singleton pointer
       if (m_useIndicatorManager && m_indicatorManager != NULL && m_indicatorManager.IsInitialized())
       {
          // Use IndicatorManager for MA values
          double ma9, ma21, ma50, ma89;
-         if (m_indicatorManager.GetMAValuesForRange(m_timeframe, ma9, ma21, ma50, ma89, shift))
+         bool success = m_indicatorManager.GetMAValuesForRange(m_timeframe, ma9, ma21, ma50, ma89, shift);
+
+         DebugRegimeLogFile("GetMAValue", StringFormat("IndicatorManager success: %s, MA50: %.5f", success ? "true" : "false", ma50));
+
+         if (success && period == 50)
          {
-            if (period == 50)
-               return ma50;
-            if (period == 89)
-               return ma89;
+            return ma50;
          }
-         else
+         if (success && period == 89)
          {
-            double ma_fast, ma_slow, ma_medium;
-            if (m_indicatorManager.GetMAValues(m_timeframe, ma_fast, ma_slow, ma_medium, shift))
-            {
-               if (period == 9)
-                  return ma_fast;
-               if (period == 21)
-                  return ma_medium;
-               if (period == 89)
-                  return ma_slow;
-            }
+            return ma89;
          }
+      }
+      else
+      {
+         DebugRegimeLogFile("GetMAValue", "IndicatorManager not available, using fallback");
       }
 
       // Fallback to direct MA calculation
       int handle = iMA(m_symbol, m_timeframe, period, 0, MODE_SMA, PRICE_CLOSE);
+
       if (handle == INVALID_HANDLE)
+      {
+         DebugRegimeError("GetMAValue", "INVALID HANDLE!");
          return 0;
+      }
 
       double values[];
       ArraySetAsSeries(values, true);
 
-      if (CopyBuffer(handle, 0, shift, 1, values) > 0)
-      {
-         IndicatorRelease(handle);
-         return values[0];
-      }
+      int copied = CopyBuffer(handle, 0, shift, 1, values);
+      DebugRegimeLogFile("GetMAValue", StringFormat("Copied: %d bars, value[0] = %.5f", copied, values[0]));
 
       IndicatorRelease(handle);
-      return 0;
+
+      return values[0];
    }
 
    bool IsMATrendAligned()
@@ -1281,7 +1635,7 @@ private:
                if ((maAlignedBullish && maSlopeBullish) ||
                    (maAlignedBearish && maSlopeBearish))
                {
-                  DebugRegimeLogFile("IsMATrendAligned", "MA trend alignment confirmed");
+                  DebugRegimeLogFile("IsMATrendAligned", StringFormat("Instance #%d | MA trend alignment confirmed", m_instanceId));
                   return true;
                }
             }
@@ -1299,23 +1653,33 @@ private:
       {
       case STATE_TRENDING_LOW_VOL:
       case STATE_TRENDING_HIGH_VOL:
+      case STATE_EXPANSION: // Expansion is treated as trend-like
          rootState = REGIME_TRENDING;
          break;
 
       case STATE_RANGING_LOW_VOL:
       case STATE_RANGING_HIGH_VOL:
+      case STATE_CONTRACTION: // Contraction is treated as range-like
+      case STATE_CHURN:       // Churn is treated as range-like
          rootState = REGIME_RANGING;
          break;
 
       default:
-         rootState = REGIME_UNKNOWN;
+      {
+         // Safety fallback - if we get here, classify based on ADX
+         double adx = m_cache.adx;
+         if (adx >= m_adxTrendingThreshold)
+            rootState = REGIME_TRENDING;
+         else
+            rootState = REGIME_RANGING;
+         break;
+      }
       }
 
       DebugRegimeLogFile("GetRootState",
-                         StringFormat("Root state for %s: %s",
-                                      MarketAnalysis::GetStateString(state),
-                                      rootState == REGIME_TRENDING ? "TRENDING" : rootState == REGIME_RANGING ? "RANGING"
-                                                                                                              : "UNKNOWN"));
+                         StringFormat("Instance #%d | Root state for %s: %s",
+                                      m_instanceId, MarketAnalysis::GetStateString(state),
+                                      rootState == REGIME_TRENDING ? "TRENDING" : "RANGING"));
 
       return rootState;
    }
@@ -1325,35 +1689,40 @@ private:
    //+------------------------------------------------------------------+
    double GetADX(int period)
    {
+      DebugRegimeLogFile("GetADX", StringFormat("Getting ADX (period=%d)", period));
+
       if (m_useIndicatorManager && m_indicatorManager != NULL && m_indicatorManager.IsInitialized())
       {
          double adx, plus_di, minus_di;
-         if (m_indicatorManager.GetADXValues(m_timeframe, adx, plus_di, minus_di))
+         bool success = m_indicatorManager.GetADXValues(m_timeframe, adx, plus_di, minus_di);
+         DebugRegimeLogFile("GetADX", StringFormat("IndicatorManager ADX: success=%s, value=%.1f", success ? "true" : "false", adx));
+
+         if (success)
          {
             return adx;
          }
       }
 
-      // Fallback to direct calculation
+      // Fallback
       int handle = iADX(m_symbol, m_timeframe, period);
       if (handle == INVALID_HANDLE)
-         return 0;
-
-      double adx[];
-      ArraySetAsSeries(adx, true);
-
-      if (CopyBuffer(handle, 0, 0, 1, adx) > 0)
       {
-         IndicatorRelease(handle);
-         return adx[0];
+         DebugRegimeError("GetADX", "ADX handle invalid!");
+         return 0;
       }
 
+      double adx_val[];
+      ArraySetAsSeries(adx_val, true);
+      int copied = CopyBuffer(handle, 0, 0, 1, adx_val);
+      DebugRegimeLogFile("GetADX", StringFormat("Copied: %d, ADX value: %.1f", copied, adx_val[0]));
+
       IndicatorRelease(handle);
-      return 0;
+      return adx_val[0];
    }
 
    double GetATR(int period)
    {
+      // ✅ Check for valid singleton pointer
       if (m_useIndicatorManager && m_indicatorManager != NULL && m_indicatorManager.IsInitialized())
       {
          return m_indicatorManager.GetATR(m_timeframe);
@@ -1379,37 +1748,59 @@ private:
 
    double GetBollingerWidth(int period, double deviations)
    {
+      // ✅ First check IndicatorManager
       if (m_useIndicatorManager && m_indicatorManager != NULL && m_indicatorManager.IsInitialized())
       {
          double upper, middle, lower;
          if (m_indicatorManager.GetBollingerBandsValues(m_timeframe, upper, middle, lower))
          {
-            double currentPrice = iClose(m_symbol, m_timeframe, 0);
-            if (currentPrice > 0)
-               return (upper - lower) / currentPrice;
+            // CRITICAL: Calculate width as PERCENTAGE
+            if (middle > 0)
+            {
+               double width = ((upper - lower) / middle) * 100.0;
+               DebugRegimeLogFile("GetBollingerWidth",
+                                  StringFormat("Upper=%.5f, Lower=%.5f, Middle=%.5f, Width=%.3f%%",
+                                               upper, lower, middle, width));
+               return width;
+            }
          }
       }
 
       // Fallback to direct calculation
       int handle = iBands(m_symbol, m_timeframe, period, 0, deviations, PRICE_CLOSE);
-      if (handle == INVALID_HANDLE)
-         return 0;
 
-      double upper[], lower[];
+      if (handle == INVALID_HANDLE)
+      {
+         DebugRegimeError("GetBollingerWidth", "BBands handle invalid");
+         return 0.5; // Default moderate width
+      }
+
+      double upper[], middle[], lower[];
       ArraySetAsSeries(upper, true);
+      ArraySetAsSeries(middle, true);
       ArraySetAsSeries(lower, true);
 
-      if (CopyBuffer(handle, 1, 0, 1, upper) > 0 &&
-          CopyBuffer(handle, 2, 0, 1, lower) > 0)
+      // Copy 2 bars for safety
+      if (CopyBuffer(handle, 1, 0, 2, upper) <= 0 ||
+          CopyBuffer(handle, 0, 0, 2, middle) <= 0 ||
+          CopyBuffer(handle, 2, 0, 2, lower) <= 0)
       {
          IndicatorRelease(handle);
-         double currentPrice = iClose(m_symbol, m_timeframe, 0);
-         if (currentPrice > 0)
-            return (upper[0] - lower[0]) / currentPrice;
+         DebugRegimeError("GetBollingerWidth", "Failed to copy BBands buffers");
+         return 0.5;
+      }
+
+      double width = 0;
+      if (middle[0] > 0)
+      {
+         width = ((upper[0] - lower[0]) / middle[0]) * 100.0;
+         DebugRegimeLogFile("GetBollingerWidth",
+                            StringFormat("Direct: Upper=%.5f, Lower=%.5f, Middle=%.5f, Width=%.3f%%",
+                                         upper[0], lower[0], middle[0], width));
       }
 
       IndicatorRelease(handle);
-      return 0;
+      return width;
    }
 
    double GetPriceChange(int bars)
@@ -1444,37 +1835,56 @@ private:
          }
       }
 
-      DebugRegimeLogFile("CountRangeTouches", StringFormat("Range touches: %d", touches));
+      DebugRegimeLogFile("CountRangeTouches", StringFormat("Instance #%d | Range touches: %d", m_instanceId, touches));
       return touches;
    }
 
    // In CalculateVolatilityScore() function:
    double CalculateVolatilityScore(double atr, double bbWidth)
    {
-      // Use longer period for smoothing (increase from 20 to 50)
-      double atrValues[10];
-      int lookback = m_structureLookbackBars; // Increased from 20
+      // 1. Convert ATR to percentage of current price
+      double currentPrice = iClose(m_symbol, m_timeframe, 0);
+      double atrPercent = (atr / currentPrice) * 100.0;
 
-      for (int i = 0; i < lookback; i++)
-      {
-         double price = iClose(m_symbol, m_timeframe, i);
-         if (price > 0)
-            atrValues[i] = GetATRValue(14, i) / price;
+      // 2. BB Width is already a percentage (e.g., 0.5 for 0.5%)
+      double bbPercent = bbWidth;
+
+      // 3. Diagnostic print
+      DebugRegimeLogFile("VolatilityCalc",
+                         StringFormat("Inputs: ATR=%.5f -> %.3f%%, BB Width=%.3f%%",
+                                      atr, atrPercent, bbPercent));
+
+      // 4. Use weighted average (ATR is more reliable)
+      double combinedVolatility = (atrPercent * 0.7) + (bbPercent * 0.3);
+
+      // 5. Normalize with realistic thresholds for XAUUSD
+      double volatilityScore = 0.0;
+
+      if (combinedVolatility <= 0.1)
+      { // < 0.1%: Very low
+         volatilityScore = 0.1;
+      }
+      else if (combinedVolatility <= 0.3)
+      { // 0.1-0.3%: Low
+         volatilityScore = 0.3;
+      }
+      else if (combinedVolatility <= 0.7)
+      { // 0.3-0.7%: Moderate
+         volatilityScore = 0.5;
+      }
+      else if (combinedVolatility <= 1.2)
+      { // 0.7-1.2%: High
+         volatilityScore = 0.8;
+      }
+      else
+      { // > 1.2%: Very high
+         volatilityScore = 1.0;
       }
 
-      double currentAtrNorm = atr / iClose(m_symbol, m_timeframe, 0);
-      double avgAtrNorm = ArrayAverage(atrValues, lookback);
+      DebugRegimeLogFile("VolatilityCalc",
+                         StringFormat("Combined=%.3f%%, Score=%.3f", combinedVolatility, volatilityScore));
 
-      if (avgAtrNorm > 0)
-      {
-         // Apply smoothing to reduce noise
-         static double smoothedScore = 0.5;
-         double rawScore = MathMin(1.0, currentAtrNorm / avgAtrNorm);
-         smoothedScore = smoothedScore * 0.3 + rawScore * 0.7; // 50% weight to previous value
-         return smoothedScore;
-      }
-
-      return 0.5;
+      return volatilityScore;
    }
 
    bool IsVolatilityRising()
@@ -1483,8 +1893,9 @@ private:
       double atrBefore = GetATRValue(14, 5);
 
       bool rising = atrNow > atrBefore * 1.1;
-      DebugRegimeLogFile("IsVolatilityRising", StringFormat("ATR now=%.5f, before=%.5f, rising=%s",
-                                                            atrNow, atrBefore, rising ? "true" : "false"));
+      DebugRegimeLogFile("IsVolatilityRising",
+                         StringFormat("Instance #%d | ATR now=%.5f, before=%.5f, rising=%s",
+                                      m_instanceId, atrNow, atrBefore, rising ? "true" : "false"));
       return rising;
    }
 
@@ -1515,7 +1926,7 @@ private:
 
    bool IsTrendingStructure()
    {
-      DebugRegimeLogFile("IsTrendingStructure", "Checking for trending price structure");
+      DebugRegimeLogFile("IsTrendingStructure", StringFormat("Instance #%d | Checking for trending price structure", m_instanceId));
 
       // ========== NEW: ADD MOVING AVERAGE CONFIRMATION ==========
       // Get MA values using IndicatorManager or direct
@@ -1528,7 +1939,7 @@ private:
       // Check if we got valid values
       if (ma50 <= 0 || ma89 <= 0 || ma200 <= 0)
       {
-         DebugRegimeLogFile("IsTrendingStructure", "Invalid MA values, falling back to basic structure check");
+         DebugRegimeLogFile("IsTrendingStructure", StringFormat("Instance #%d | Invalid MA values, falling back to basic structure check", m_instanceId));
          // Fall back to original price structure logic
          return CheckBasicTrendStructure();
       }
@@ -1582,8 +1993,8 @@ private:
       double downtrendRatio = totalChecks > 0 ? (double)downtrendSignals / totalChecks : 0;
 
       DebugRegimeLogFile("IsTrendingStructure",
-                         StringFormat("Price structure: Uptrend ratio=%.2f, Downtrend ratio=%.2f",
-                                      uptrendRatio, downtrendRatio));
+                         StringFormat("Instance #%d | Price structure: Uptrend ratio=%.2f, Downtrend ratio=%.2f",
+                                      m_instanceId, uptrendRatio, downtrendRatio));
 
       // ========== DECISION LOGIC (BALANCED) ==========
 
@@ -1595,12 +2006,12 @@ private:
          // Changed from 0.4 to 0.5 threshold - need clearer trend structure
          if (maAlignedBullish && uptrendRatio > 0.45)
          {
-            DebugRegimeLogFile("IsTrendingStructure", "MA aligned bullish with uptrend structure");
+            DebugRegimeLogFile("IsTrendingStructure", StringFormat("Instance #%d | MA aligned bullish with uptrend structure", m_instanceId));
             return true; // Need 50% confirmation (was 40%)
          }
          if (maAlignedBearish && downtrendRatio > 0.45)
          {
-            DebugRegimeLogFile("IsTrendingStructure", "MA aligned bearish with downtrend structure");
+            DebugRegimeLogFile("IsTrendingStructure", StringFormat("Instance #%d | MA aligned bearish with downtrend structure", m_instanceId));
             return true;
          }
       }
@@ -1608,7 +2019,7 @@ private:
       // Original logic - keep as primary
       if (uptrendRatio > 0.6 || downtrendRatio > 0.6) // 70% threshold
       {
-         DebugRegimeLogFile("IsTrendingStructure", "Strong price structure detected");
+         DebugRegimeLogFile("IsTrendingStructure", StringFormat("Instance #%d | Strong price structure detected", m_instanceId));
          return true;
       }
 
@@ -1620,17 +2031,17 @@ private:
       if (distanceFromMA > 1.0) // Changed from 1.0% to 1.5% - more conservative
       {
          DebugRegimeLogFile("IsTrendingStructure",
-                            StringFormat("Price far from MA200 (%.2f%%), forcing trend classification", distanceFromMA));
+                            StringFormat("Instance #%d | Price far from MA200 (%.2f%%), forcing trend classification", m_instanceId, distanceFromMA));
          return true; // Force trend classification
       }
 
-      DebugRegimeLogFile("IsTrendingStructure", "No trending structure detected");
+      DebugRegimeLogFile("IsTrendingStructure", StringFormat("Instance #%d | No trending structure detected", m_instanceId));
       return false;
    }
 
    bool CheckBasicTrendStructure()
    {
-      DebugRegimeLogFile("CheckBasicTrendStructure", "Running basic 5-bar trend structure check");
+      DebugRegimeLogFile("CheckBasicTrendStructure", StringFormat("Instance #%d | Running basic 5-bar trend structure check", m_instanceId));
 
       // Your original 5-bar HH/HL or LH/LL logic
       double highs[5], lows[5];
@@ -1665,8 +2076,8 @@ private:
 
       bool result = uptrend || downtrend;
       DebugRegimeLogFile("CheckBasicTrendStructure",
-                         StringFormat("Basic trend check result: %s (Uptrend: %s, Downtrend: %s)",
-                                      result ? "true" : "false", uptrend ? "true" : "false", downtrend ? "true" : "false"));
+                         StringFormat("Instance #%d | Basic trend check result: %s (Uptrend: %s, Downtrend: %s)",
+                                      m_instanceId, result ? "true" : "false", uptrend ? "true" : "false", downtrend ? "true" : "false"));
 
       return result;
    }
@@ -1675,7 +2086,7 @@ private:
    {
       if (!m_rangeActive)
       {
-         DebugRegimeLogFile("IsRangingStructure", "Range not active");
+         DebugRegimeLogFile("IsRangingStructure", StringFormat("Instance #%d | Range not active", m_instanceId));
          return false;
       }
 
@@ -1683,8 +2094,8 @@ private:
       bool inRange = IsPriceInFixedRange(currentPrice);
 
       DebugRegimeLogFile("IsRangingStructure",
-                         StringFormat("Price %.5f in range %.5f-%.5f: %s",
-                                      currentPrice, m_fixedRangeBottom, m_fixedRangeTop, inRange ? "true" : "false"));
+                         StringFormat("Instance #%d | Price %.5f in range %.5f-%.5f: %s",
+                                      m_instanceId, currentPrice, m_fixedRangeBottom, m_fixedRangeTop, inRange ? "true" : "false"));
 
       return inRange;
    }
@@ -1692,7 +2103,8 @@ private:
    double CalculateConfidence(ENUM_MARKET_STATE state)
    {
       DebugRegimeLogFile("CalculateConfidence",
-                         StringFormat("Calculating confidence for state: %s", MarketAnalysis::GetStateString(state)));
+                         StringFormat("Instance #%d | Calculating confidence for state: %s",
+                                      m_instanceId, MarketAnalysis::GetStateString(state)));
 
       double adx = m_cache.adx;                  // Use cached ADX
       double atrScore = m_cache.volatilityScore; // Use cached volatility score
@@ -1740,8 +2152,8 @@ private:
       confidence = MathMin(100, MathMax(0, confidence));
 
       DebugRegimeLogFile("CalculateConfidence",
-                         StringFormat("Final confidence: %.1f%% (ADX=%.1f, ATRScore=%.2f, StructureConf=%.0f)",
-                                      confidence, adx, atrScore, structureConfidence));
+                         StringFormat("Instance #%d | Final confidence: %.1f%% (ADX=%.1f, ATRScore=%.2f, StructureConf=%.0f)",
+                                      m_instanceId, confidence, adx, atrScore, structureConfidence));
 
       return confidence;
    }
@@ -1752,7 +2164,8 @@ private:
    ENUM_MARKET_STATE PredictNextState(ENUM_MARKET_STATE currentState)
    {
       DebugRegimeLogFile("PredictNextState",
-                         StringFormat("Predicting next state from: %s", MarketAnalysis::GetStateString(currentState)));
+                         StringFormat("Instance #%d | Predicting next state from: %s",
+                                      m_instanceId, MarketAnalysis::GetStateString(currentState)));
 
       ENUM_MARKET_STATE nextState;
 
@@ -1799,7 +2212,8 @@ private:
       }
 
       DebugRegimeLogFile("PredictNextState",
-                         StringFormat("Predicted next state: %s", MarketAnalysis::GetStateString(nextState)));
+                         StringFormat("Instance #%d | Predicted next state: %s",
+                                      m_instanceId, MarketAnalysis::GetStateString(nextState)));
 
       return nextState;
    }
@@ -1809,7 +2223,7 @@ private:
    //+------------------------------------------------------------------+
    void GenerateRecommendations(MarketAnalysis &analysis)
    {
-      DebugRegimeLogFile("GenerateRecommendations", "Generating trading recommendations");
+      DebugRegimeLogFile("GenerateRecommendations", StringFormat("Instance #%d | Generating trading recommendations", m_instanceId));
 
       double currentPrice = m_cache.currentPrice; // Use cached price
       double atr = m_cache.atr;                   // Use cached ATR
@@ -1832,7 +2246,7 @@ private:
          analysis.takeProfitDistance = (m_fixedRangeTop - m_fixedRangeBottom) * 0.6;
          analysis.riskRewardRatio = 3.0;
          analysis.direction = "Mean reversion";
-         DebugRegimeLogFile("GenerateRecommendations", "RANGING_LOW_VOL: Fade extremes, mean reversion");
+         DebugRegimeLogFile("GenerateRecommendations", StringFormat("Instance #%d | RANGING_LOW_VOL: Fade extremes, mean reversion", m_instanceId));
          break;
 
       case STATE_RANGING_HIGH_VOL:
@@ -1842,7 +2256,7 @@ private:
          analysis.takeProfitDistance = atr * 1.5;
          analysis.riskRewardRatio = 2.0;
          analysis.direction = "Neutral (dangerous)";
-         DebugRegimeLogFile("GenerateRecommendations", "RANGING_HIGH_VOL: Fade carefully, tight stops");
+         DebugRegimeLogFile("GenerateRecommendations", StringFormat("Instance #%d | RANGING_HIGH_VOL: Fade carefully, tight stops", m_instanceId));
          break;
 
       case STATE_CONTRACTION:
@@ -1852,7 +2266,7 @@ private:
          analysis.takeProfitDistance = 0;
          analysis.riskRewardRatio = 0;
          analysis.direction = "Neutral (waiting)";
-         DebugRegimeLogFile("GenerateRecommendations", "CONTRACTION: No trades, prepare for breakout");
+         DebugRegimeLogFile("GenerateRecommendations", StringFormat("Instance #%d | CONTRACTION: No trades, prepare for breakout", m_instanceId));
          break;
 
       case STATE_EXPANSION:
@@ -1865,17 +2279,17 @@ private:
          if (currentPrice > m_fixedRangeTop)
          {
             analysis.direction = "Bullish breakout";
-            DebugRegimeLogFile("GenerateRecommendations", "EXPANSION: Bullish breakout entry");
+            DebugRegimeLogFile("GenerateRecommendations", StringFormat("Instance #%d | EXPANSION: Bullish breakout entry", m_instanceId));
          }
          else if (currentPrice < m_fixedRangeBottom)
          {
             analysis.direction = "Bearish breakout";
-            DebugRegimeLogFile("GenerateRecommendations", "EXPANSION: Bearish breakout entry");
+            DebugRegimeLogFile("GenerateRecommendations", StringFormat("Instance #%d | EXPANSION: Bearish breakout entry", m_instanceId));
          }
          else
          {
             analysis.direction = "Testing";
-            DebugRegimeLogFile("GenerateRecommendations", "EXPANSION: Testing breakout");
+            DebugRegimeLogFile("GenerateRecommendations", StringFormat("Instance #%d | EXPANSION: Testing breakout", m_instanceId));
          }
          break;
 
@@ -1886,7 +2300,7 @@ private:
          analysis.takeProfitDistance = atr * 6.0;
          analysis.riskRewardRatio = 3.0;
          analysis.direction = IsTrendingStructure() ? "With trend" : "Neutral";
-         DebugRegimeLogFile("GenerateRecommendations", "TRENDING_LOW_VOL: Add to winning positions");
+         DebugRegimeLogFile("GenerateRecommendations", StringFormat("Instance #%d | TRENDING_LOW_VOL: Add to winning positions", m_instanceId));
          break;
 
       case STATE_TRENDING_HIGH_VOL:
@@ -1896,7 +2310,7 @@ private:
          analysis.takeProfitDistance = atr * 2.0;
          analysis.riskRewardRatio = 2.0;
          analysis.direction = "With trend (cautious)";
-         DebugRegimeLogFile("GenerateRecommendations", "TRENDING_HIGH_VOL: Take partial profits");
+         DebugRegimeLogFile("GenerateRecommendations", StringFormat("Instance #%d | TRENDING_HIGH_VOL: Take partial profits", m_instanceId));
          break;
 
       case STATE_CHURN:
@@ -1906,7 +2320,7 @@ private:
          analysis.takeProfitDistance = 0;
          analysis.riskRewardRatio = 0;
          analysis.direction = "Neutral (avoid)";
-         DebugRegimeLogFile("GenerateRecommendations", "CHURN: Exit positions, wait for clarity");
+         DebugRegimeLogFile("GenerateRecommendations", StringFormat("Instance #%d | CHURN: Exit positions, wait for clarity", m_instanceId));
          break;
       }
 
@@ -1914,15 +2328,29 @@ private:
       analysis.positionSize = AdjustPositionSize(analysis.positionSize);
 
       DebugRegimeLogFile("GenerateRecommendations",
-                         StringFormat("Final recommendation: %s, Position: %s, Stop: %.2f, TP: %.2f, R/R: %.1f",
-                                      analysis.action, GetPositionSizeString(analysis.positionSize),
+                         StringFormat("Instance #%d | Final recommendation: %s, Position: %s, Stop: %.2f, TP: %.2f, R/R: %.1f",
+                                      m_instanceId, analysis.action, GetPositionSizeString(analysis.positionSize),
                                       analysis.stopDistance, analysis.takeProfitDistance, analysis.riskRewardRatio));
 
       // Log trading recommendation
-      Logger::LogTrade("Recommendation", m_symbol,
-                       analysis.direction == "Bullish breakout" ? "BUY" : analysis.direction == "Bearish breakout" ? "SELL"
-                                                                                                                   : "HOLD",
-                       0, currentPrice);
+      if (DEBUG_REGIME_ENABLED)
+      {
+         string tradeSignal = "HOLD";
+         if (analysis.direction == "Bullish breakout")
+            tradeSignal = "BUY";
+         else if (analysis.direction == "Bearish breakout")
+            tradeSignal = "SELL";
+
+         // Simple log message
+         string tradeMsg = StringFormat("Instance #%d | Trade Signal: %s | Action: %s | Position Size: %s | R/R: %.1f",
+                                        m_instanceId, tradeSignal,
+                                        analysis.action,
+                                        GetPositionSizeString(analysis.positionSize),
+                                        analysis.riskRewardRatio);
+
+         // Use debug wrapper
+         DebugRegimeLogFile("Recommendation", tradeMsg);
+      }
 
       // Convert to pips for display if needed
       double point = SymbolInfoDouble(m_symbol, SYMBOL_POINT);
@@ -1946,11 +2374,11 @@ private:
          {
          case SIZE_LARGE:
             adjustedSize = SIZE_MEDIUM;
-            DebugRegimeLogFile("AdjustPositionSize", "Account small: LARGE -> MEDIUM");
+            DebugRegimeLogFile("AdjustPositionSize", StringFormat("Instance #%d | Account small: LARGE -> MEDIUM", m_instanceId));
             break;
          case SIZE_MEDIUM:
             adjustedSize = SIZE_SMALL;
-            DebugRegimeLogFile("AdjustPositionSize", "Account small: MEDIUM -> SMALL");
+            DebugRegimeLogFile("AdjustPositionSize", StringFormat("Instance #%d | Account small: MEDIUM -> SMALL", m_instanceId));
             break;
          default:
             adjustedSize = baseSize;
@@ -1958,8 +2386,8 @@ private:
       }
 
       DebugRegimeLogFile("AdjustPositionSize",
-                         StringFormat("Position size: %s -> %s (Account: $%.2f, Risk: $%.2f)",
-                                      GetPositionSizeString(baseSize),
+                         StringFormat("Instance #%d | Position size: %s -> %s (Account: $%.2f, Risk: $%.2f)",
+                                      m_instanceId, GetPositionSizeString(baseSize),
                                       GetPositionSizeString(adjustedSize),
                                       m_accountBalance, riskAmount));
 
@@ -2022,7 +2450,7 @@ private:
          desc = "Market state unclear. Wait for better signals.";
       }
 
-      DebugRegimeLogFile("GenerateDescription", StringFormat("Description: %s", desc));
+      DebugRegimeLogFile("GenerateDescription", StringFormat("Instance #%d | Description: %s", m_instanceId, desc));
 
       return desc;
    }
@@ -2033,8 +2461,7 @@ public:
    //+------------------------------------------------------------------+
    void ResetRange()
    {
-      DebugRegimeLogFile("ResetRange", "Manual range reset requested");
-      Logger::Log("MarketRegime", "Manual range reset", true, true);
+      DebugRegimeLogFile("ResetRange", StringFormat("Instance #%d | Manual range reset requested", m_instanceId));
       ReinitializeRange();
    }
 
@@ -2047,10 +2474,8 @@ public:
    void SetRangeLookbackBars(int bars)
    {
       m_rangeLookbackBars = bars;
-      string msg = "Range lookback bars set to: " + IntegerToString(bars);
-      Print(msg);
-      Logger::Log("MarketRegime", msg, true, false);
-      DebugRegimeLogFile("SetRangeLookbackBars", msg);
+      string msg = StringFormat("Instance #%d | Range lookback bars set to: %d", m_instanceId, bars);
+      DebugRegimePrint("SetRangeLookbackBars", msg);
    }
 
    //+------------------------------------------------------------------+
@@ -2066,8 +2491,8 @@ public:
       m_accountRiskPercent = riskPercent;
 
       DebugRegimeLogFile("SetAccountInfo",
-                         StringFormat("Account info updated: Balance=$%.2f, Risk=%.1f%%",
-                                      balance, riskPercent));
+                         StringFormat("Instance #%d | Account info updated: Balance=$%.2f, Risk=%.1f%%",
+                                      m_instanceId, balance, riskPercent));
    }
 
    // Access to IndicatorManager for other uses
@@ -2078,7 +2503,7 @@ public:
    {
       bool initialized = (m_indicatorManager != NULL && m_indicatorManager.IsInitialized());
       DebugRegimeLogFile("IsIndicatorManagerInitialized",
-                         StringFormat("IndicatorManager initialized: %s", initialized ? "true" : "false"));
+                         StringFormat("Instance #%d | IndicatorManager initialized: %s", m_instanceId, initialized ? "true" : "false"));
       return initialized;
    }
 
@@ -2096,6 +2521,9 @@ public:
    int GetRangeTouchesWeak() const { return m_rangeTouchesWeak; }
    int GetRangeTouchesStrong() const { return m_rangeTouchesStrong; }
 };
+
+// Initialize static member
+int MarketRegimeDetector::m_totalInstances = 0;
 
 void DrawHorizontalLine(long chartId, string name, double price, color clr,
                         ENUM_LINE_STYLE style, int width)
@@ -2129,7 +2557,7 @@ void DrawText(long chartId, string name, datetime time, double price,
 //+------------------------------------------------------------------+
 void DisplayMarketRegimeOnChart(MarketAnalysis &analysis,
                                 string symbol = NULL,
-                                ENUM_TIMEFRAMES tf = PERIOD_H1,
+                                ENUM_TIMEFRAMES tf = PERIOD_M15,
                                 int corner = CORNER_RIGHT_UPPER)
 {
    DebugRegimeLogFile("DisplayMarketRegimeOnChart", "Updating chart display");
@@ -2173,11 +2601,11 @@ void DisplayMarketRegimeOnChart(MarketAnalysis &analysis,
       return;
    }
 
-   // Draw fixed range on chart if active
-   MarketRegimeDetector detector(symbol, tf);
+   // Get singleton instance instead of creating new detector
+   MarketRegimeDetector *detector = MarketRegimeDetector::Instance(symbol, tf);
 
    // Double-check: Is range actually active?
-   if (shouldShowRange)
+   if (shouldShowRange && detector != NULL)
    {
       double top = detector.GetRangeTop();
       double bottom = detector.GetRangeBottom();
@@ -2337,18 +2765,28 @@ color GetRangePositionColor(double positionPercent)
 //| ENHANCED GLOBAL HELPER FUNCTION                                  |
 //+------------------------------------------------------------------+
 MarketAnalysis GetMarketRegimeWithDisplay(string symbol = NULL,
-                                          ENUM_TIMEFRAMES tf = PERIOD_H1,
+                                          ENUM_TIMEFRAMES tf = PERIOD_M15,
                                           bool showPanel = true,
                                           int panelCorner = CORNER_RIGHT_UPPER,
                                           bool useIndicatorManager = true)
 {
-   static MarketRegimeDetector *detector = NULL;
+   // ✅ Use the singleton instance
+   MarketRegimeDetector *detector = MarketRegimeDetector::Instance(symbol, tf, 0, 0, useIndicatorManager);
 
    if (detector == NULL)
    {
-      detector = new MarketRegimeDetector(symbol, tf, 0, 0, useIndicatorManager); // Use input parameters
-      Logger::Log("MarketRegime", StringFormat("Global detector initialized for %s using input parameters", symbol), true, false);
+      DebugRegimeError("GetMarketRegimeWithDisplay", "Failed to get MarketRegimeDetector singleton");
+      MarketAnalysis errorAnalysis;
+      errorAnalysis.state = STATE_UNKNOWN;
+      errorAnalysis.confidence = 0;
+      errorAnalysis.action = "ERROR: Detector failed";
+      return errorAnalysis;
    }
+
+   // Add instance identifier to logs
+   DebugRegimeLogFile("GetMarketRegimeWithDisplay",
+                      StringFormat("Using detector instance #%d for %s timeframe %d",
+                                   detector.GetInstanceId(), detector.GetSymbol(), detector.GetTimeframe()));
 
    // Get analysis
    MarketAnalysis analysis = detector.GetMarketRegime();
@@ -2360,5 +2798,16 @@ MarketAnalysis GetMarketRegimeWithDisplay(string symbol = NULL,
    }
 
    return analysis;
+}
+
+//+------------------------------------------------------------------+
+//| CLEANUP FUNCTION - Call this in OnDeinit()                       |
+//+------------------------------------------------------------------+
+void CleanupMarketRegimeDetector()
+{
+   DebugRegimePrint("Cleanup", "=== CLEANING UP MARKET REGIME DETECTOR ===");
+   DebugRegimeLogFile("Cleanup", StringFormat("Total instances before cleanup: %d", MarketRegimeDetector::GetTotalInstances()));
+   MarketRegimeDetector::DeleteInstance();
+   DebugRegimeLogFile("Cleanup", StringFormat("Total instances after cleanup: %d", MarketRegimeDetector::GetTotalInstances()));
 }
 //+------------------------------------------------------------------+
